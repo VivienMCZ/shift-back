@@ -1,0 +1,9 @@
+# Dépendances d'exécution — versions figées pour des builds reproductibles.
+# Mises à jour automatiquement par Dependabot (.github/dependabot.yml).
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+sqlalchemy==2.0.52
+psycopg2-binary==2.9.12
+httpx==0.28.1
+python-dotenv==1.2.3
+PyJWT==2.13.0

@@ -1,0 +1,20 @@
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+.env
+
+# Tests et couverture
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+pytest-report.xml
+pip-audit.json
+
+# Scanner SonarQube
+.scannerwork/
+
+# Bases de données locales
+*.db

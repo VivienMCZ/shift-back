@@ -1,0 +1,79 @@
+services:
+  db:
+    image: postgres:13
+    environment:
+      # A05 : plus de mot de passe en dur. Renseigner .env (cf. .env.example).
+      - POSTGRES_USER=${POSTGRES_USER:?POSTGRES_USER manquant dans .env}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD manquant dans .env}
+      - POSTGRES_DB=${POSTGRES_DB:-postgres}
+    ports:
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/app/app:ro
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-postgres}
+      - PYTHONUNBUFFERED=1
+      # A02 : aucune valeur par défaut. Un secret en dur dans un fichier versionné
+      # permettrait de forger des jetons de session sur n'importe quel déploiement.
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET manquant dans .env (32 caractères minimum)}
+      # A01 : requis pour toute écriture sur /api/v1/libs.
+      - ADMIN_API_TOKEN=${ADMIN_API_TOKEN:-}
+      - COOKIE_SECURE=${COOKIE_SECURE:-false}
+      - COOKIE_SAMESITE=${COOKIE_SAMESITE:-lax}
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
+      - ENABLE_DOCS=${ENABLE_DOCS:-true}
+      - OTP_DEBUG_DELIVERY=${OTP_DEBUG_DELIVERY:-false}
+      - DB_INIT_RETRIES=${DB_INIT_RETRIES:-5}
+      - DB_INIT_RETRY_DELAY_SECONDS=${DB_INIT_RETRY_DELAY_SECONDS:-2}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  front:
+    build:
+      context: ../shift-front
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        INTERNAL_API_URL: ${INTERNAL_API_URL:-http://api:8000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    # Outil d'administration : hors du profil par défaut pour ne pas exposer
+    # une console d'accès à la base à chaque `docker compose up`.
+    profiles: ["tools"]
+    ports:
+      - "5050:80"
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_EMAIL:?PGADMIN_EMAIL manquant dans .env}
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD:?PGADMIN_PASSWORD manquant dans .env}
+    depends_on:
+      - db
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+
+volumes:
+  pgdata:
+  pgadmin_data:

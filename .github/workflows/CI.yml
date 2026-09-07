@@ -1,0 +1,222 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "develop"
+      - "main"
+  pull_request:
+    branches:
+      - "develop"
+      - "main"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.13"
+
+jobs:
+  # ------------------------------------------------------------------------ #
+  # Tests unitaires et d'intégration
+  # ------------------------------------------------------------------------ #
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # Sonar a besoin de l'historique complet pour attribuer la dette
+          # technique aux bons commits (blame).
+          fetch-depth: 0
+
+      - name: Check for sensitive files
+        run: |
+          if [ -f .env ]; then
+            echo "❌ ERROR: .env file detected in the repository! You should never push this file."
+            exit 1
+          fi
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      # Les tests forcent DATABASE_URL vers un SQLite jetable (tests/conftest.py).
+      # Aucun secret de base de données n'est exposé à ce job : c'est délibéré.
+      - name: Run tests
+        run: |
+          pytest -v \
+            --junitxml=pytest-report.xml \
+            --cov --cov-report=xml --cov-report=term
+
+      - name: Upload pytest test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapport-pytest
+          path: pytest-report.xml
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapport-couverture
+          path: coverage.xml
+
+  # ------------------------------------------------------------------------ #
+  # Analyse statique SonarQube
+  # ------------------------------------------------------------------------ #
+  sonar:
+    name: SonarQube
+    runs-on: ubuntu-latest
+    needs: test
+    # L'analyse elle-même est ignorée tant que le secret SONAR_TOKEN n'est pas
+    # configuré (cf. étape « Check Sonar configuration »), afin de ne pas
+    # bloquer la CI sur un dépôt fraîchement cloné ni sur une PR issue d'un fork.
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      # Sonar consomme un rapport de couverture produit dans le même contexte
+      # que l'analyse (mêmes chemins de fichiers), on relance donc les tests ici.
+      - name: Generate coverage report
+        run: pytest -q --cov --cov-report=xml --junitxml=pytest-report.xml
+
+      - name: Check Sonar configuration
+        id: sonar_config
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          if [ -z "$SONAR_TOKEN" ]; then
+            echo "⚠️  SONAR_TOKEN absent : analyse SonarQube ignorée."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # SonarQube Cloud par défaut. Pour une instance auto-hébergée, définir la
+      # variable de dépôt SONAR_HOST_URL (Settings > Variables > Actions).
+      - name: SonarQube scan
+        if: steps.sonar_config.outputs.configured == 'true'
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}
+
+      - name: SonarQube quality gate
+        if: steps.sonar_config.outputs.configured == 'true'
+        uses: SonarSource/sonarqube-quality-gate-action@v1
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}
+
+  # ------------------------------------------------------------------------ #
+  # Scan de sécurité des dépendances
+  # ------------------------------------------------------------------------ #
+  dependency-scan:
+    name: Scan des dépendances
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install pip-audit
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit==2.10.1
+
+      # Échoue si une dépendance d'exécution porte une vulnérabilité connue
+      # (base PyPI Advisory + OSV).
+      - name: Audit des dépendances d'exécution
+        run: pip-audit --requirement requirements.txt --strict --progress-spinner=off
+
+      - name: Audit des dépendances de développement
+        run: pip-audit --requirement requirements-dev.txt --progress-spinner=off
+        continue-on-error: true
+
+      - name: Rapport JSON
+        if: always()
+        run: |
+          pip-audit --requirement requirements.txt \
+            --format json --output pip-audit.json --progress-spinner=off || true
+
+      - name: Upload rapport pip-audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapport-pip-audit
+          path: pip-audit.json
+
+  # ------------------------------------------------------------------------ #
+  # Build de l'image Docker et scan de ses dépendances système
+  # ------------------------------------------------------------------------ #
+  docker:
+    name: Image Docker
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t shift-back:ci .
+
+      - name: Smoke test de l'image
+        run: |
+          docker run --rm --entrypoint python shift-back:ci \
+            -c "import fastapi, sqlalchemy, jwt, httpx; print('imports OK')"
+
+      # Scan des paquets système de l'image de base (informatif : les CVE de
+      # l'image amont ne sont pas toujours corrigeables côté projet).
+      - name: Scan Trivy de l'image
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: shift-back:ci
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
