@@ -1,6 +1,6 @@
 # Use an official Python runtime as a parent image
 # Version alignée sur la CI (.github/workflows/CI.yml) et l'environnement local.
-FROM python:3.13-slim
+FROM python:3.14-slim
 
 # Bruit en moins dans les logs, pas de .pyc à écrire dans le conteneur.
 ENV PYTHONUNBUFFERED=1 \
