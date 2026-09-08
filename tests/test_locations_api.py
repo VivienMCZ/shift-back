@@ -5,6 +5,7 @@ la suite reste donc déterministe et exécutable hors ligne en CI.
 """
 
 import asyncio
+import time
 
 import httpx
 import pytest
@@ -225,3 +226,84 @@ def test_close_client_est_idempotent(client_partage_neuf):
     asyncio.run(locations.close_client())
     asyncio.run(locations.close_client())
 
+
+# --------------------------------------------------------------------------- #
+# Cache des réponses amont
+# --------------------------------------------------------------------------- #
+
+
+def test_search_ne_rappelle_pas_lamont_pour_la_meme_saisie(client, fake_httpx):
+    """Le quota amont est de 1 req/s partagé par tout le site : on mémorise."""
+    appels = fake_httpx(repond(REPONSE_SEARCH))
+    premier = client.get(f"{BASE}/search", params={"q": "rue de rivoli"})
+    second = client.get(f"{BASE}/search", params={"q": "rue de rivoli"})
+    assert premier.json() == second.json() == REPONSE_SEARCH
+    assert len(appels) == 1
+
+
+def test_search_distingue_deux_saisies(client, fake_httpx):
+    appels = fake_httpx(repond(REPONSE_SEARCH))
+    client.get(f"{BASE}/search", params={"q": "rue de rivoli"})
+    client.get(f"{BASE}/search", params={"q": "rue de la paix"})
+    assert len(appels) == 2
+
+
+def test_reverse_memorise_par_couple_de_coordonnees(client, fake_httpx):
+    appels = fake_httpx(repond(REPONSE_SEARCH))
+    client.get(f"{BASE}/reverse", params={"lat": 48.8566, "lng": 2.3522})
+    client.get(f"{BASE}/reverse", params={"lat": 48.8566, "lng": 2.3522})
+    client.get(f"{BASE}/reverse", params={"lat": 45.7640, "lng": 4.8357})
+    assert len(appels) == 2
+
+
+def test_reverse_sans_resultat_reste_404_depuis_le_cache(client, fake_httpx):
+    """Une réponse amont vide ne doit pas devenir un 200 une fois mémorisée."""
+    appels = fake_httpx(repond({"type": "FeatureCollection", "features": []}))
+    premier = client.get(f"{BASE}/reverse", params={"lat": 0.0, "lng": 0.0})
+    second = client.get(f"{BASE}/reverse", params={"lat": 0.0, "lng": 0.0})
+    assert premier.status_code == second.status_code == 404
+    assert len(appels) == 1
+
+
+def test_une_erreur_amont_nest_pas_memorisee(client, fake_httpx):
+    """Mémoriser un échec le figerait pour toute la durée de vie de l'entrée."""
+    appels = fake_httpx(leve(httpx.TimeoutException("trop lent")))
+    assert client.get(f"{BASE}/search", params={"q": "paris"}).status_code == 504
+    assert client.get(f"{BASE}/search", params={"q": "paris"}).status_code == 504
+    assert len(appels) == 2
+
+
+def test_cache_desactivable_par_configuration(client, fake_httpx, monkeypatch):
+    monkeypatch.setattr(locations, "CACHE_ENABLED", False)
+    appels = fake_httpx(repond(REPONSE_SEARCH))
+    client.get(f"{BASE}/search", params={"q": "paris"})
+    client.get(f"{BASE}/search", params={"q": "paris"})
+    assert len(appels) == 2
+
+
+def test_cache_expire_apres_son_delai():
+    cache = locations.ReponseCache(max_entries=10, ttl_seconds=0.05)
+    cache.set("k", {"v": 1})
+    assert cache.get("k") == {"v": 1}
+    time.sleep(0.06)
+    assert cache.get("k") is None
+    assert len(cache) == 0
+
+
+def test_cache_borne_le_nombre_dentrees():
+    """La clé vient d'une saisie libre : sans plafond, la mémoire dérive."""
+    cache = locations.ReponseCache(max_entries=3, ttl_seconds=60)
+    for i in range(10):
+        cache.set(f"k{i}", i)
+    assert len(cache) == 3
+
+
+def test_cache_evince_lentree_la_moins_recemment_lue():
+    cache = locations.ReponseCache(max_entries=2, ttl_seconds=60)
+    cache.set("a", 1)
+    cache.set("b", 2)
+    cache.get("a")          # « a » redevient la plus récente
+    cache.set("c", 3)       # évince « b »
+    assert cache.get("a") == 1
+    assert cache.get("b") is None
+    assert cache.get("c") == 3
