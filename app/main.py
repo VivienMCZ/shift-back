@@ -3,8 +3,9 @@ import os
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 from starlette.middleware.gzip import GZipMiddleware
 from sqlalchemy.exc import OperationalError
 
@@ -105,6 +106,20 @@ SECURITY_HEADERS: tuple[tuple[bytes, bytes], ...] = (
 HSTS_HEADER = (b"strict-transport-security", b"max-age=31536000; includeSubDomains")
 
 
+def entetes_manquants(deja_presents: set[bytes]) -> list[tuple[bytes, bytes]]:
+    """En-têtes de durcissement absents de ``deja_presents``.
+
+    ``COOKIE_SECURE`` est relu à chaque appel : il pilote l'émission de HSTS et
+    peut être basculé sans reconstruire l'application.
+    """
+    entetes = [
+        (name, value) for name, value in SECURITY_HEADERS if name not in deja_presents
+    ]
+    if HSTS_HEADER[0] not in deja_presents and get_env_bool("COOKIE_SECURE", False):
+        entetes.append(HSTS_HEADER)
+    return entetes
+
+
 class SecurityHeadersMiddleware:
     """Ajoute les en-têtes de durcissement sans reconstruire la réponse.
 
@@ -130,16 +145,7 @@ class SecurityHeadersMiddleware:
                 # ``setdefault`` d'origine : un en-tête déjà posé par la route
                 # n'est jamais écrasé.
                 deja_presents = {name.lower() for name, _ in headers}
-                headers.extend(
-                    (name, value)
-                    for name, value in SECURITY_HEADERS
-                    if name not in deja_presents
-                )
-                if (
-                    HSTS_HEADER[0] not in deja_presents
-                    and get_env_bool("COOKIE_SECURE", False)
-                ):
-                    headers.append(HSTS_HEADER)
+                headers.extend(entetes_manquants(deja_presents))
             await send(message)
 
         await self.app(scope, receive, send_with_headers)
@@ -147,6 +153,27 @@ class SecurityHeadersMiddleware:
 
 app.add_middleware(SecurityHeadersMiddleware)
 
+
+async def unhandled_exception_handler(request: Request, exc: Exception) -> PlainTextResponse:
+    """Réponse 500 durcie (A05).
+
+    Une exception non rattrapée remonte jusqu'à ``ServerErrorMiddleware``, qui
+    est monté *au-dessus* de tous les middlewares applicatifs : la réponse qu'il
+    fabrique ne traverse donc pas ``SecurityHeadersMiddleware`` et repartait
+    sans le moindre en-tête de durcissement. On reconstruit ici la réponse
+    exacte de Starlette — même corps, même type de contenu — en y ajoutant les
+    en-têtes.
+
+    Starlette relance systématiquement l'exception après avoir émis cette
+    réponse : la trace reste journalisée comme avant.
+    """
+    response = PlainTextResponse("Internal Server Error", status_code=500)
+    for name, value in entetes_manquants(set()):
+        response.headers[name.decode("latin-1")] = value.decode("latin-1")
+    return response
+
+
+app.add_exception_handler(Exception, unhandled_exception_handler)
 
 
 # Les origines autorisées sont configurables : la liste par défaut ne couvre que

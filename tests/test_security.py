@@ -8,7 +8,9 @@ import os
 
 import jwt
 import pytest
+from fastapi.testclient import TestClient
 
+from app.main import app
 from app.models import User
 from app.routers import auth as auth_module
 from app.security import (
@@ -379,6 +381,57 @@ def test_csp_interdit_tout_chargement_externe(client):
 def test_hsts_absent_en_http(client):
     """HSTS sur une origine non chiffrée n'a pas de sens et bloque le dev local."""
     assert "strict-transport-security" not in client.get("/health").headers
+
+
+@pytest.fixture
+def client_qui_plante():
+    """Client exposant une route qui lève, sans faire remonter l'erreur au test.
+
+    La réponse 500 est fabriquée par ``ServerErrorMiddleware``, monté au-dessus
+    des middlewares applicatifs : c'est le seul chemin de réponse qui ne
+    traverse pas ``SecurityHeadersMiddleware``.
+    """
+    chemin = "/_erreur_de_test"
+
+    @app.get(chemin)
+    def _erreur():
+        raise RuntimeError("panne simulée")
+
+    try:
+        yield TestClient(app, raise_server_exceptions=False), chemin
+    finally:
+        app.router.routes = [
+            route for route in app.router.routes
+            if getattr(route, "path", None) != chemin
+        ]
+
+
+@pytest.mark.parametrize(
+    "entete",
+    [
+        "x-content-type-options",
+        "x-frame-options",
+        "referrer-policy",
+        "cross-origin-opener-policy",
+        "permissions-policy",
+        "content-security-policy",
+    ],
+)
+def test_entetes_de_securite_presents_sur_une_500(client_qui_plante, entete):
+    """A05 — une panne serveur ne doit pas renvoyer une réponse non durcie."""
+    test_client, chemin = client_qui_plante
+    reponse = test_client.get(chemin)
+    assert reponse.status_code == 500
+    assert entete in reponse.headers
+
+
+def test_la_500_garde_le_corps_generique_de_starlette(client_qui_plante):
+    """Le durcissement ne doit pas transformer la réponse ni divulguer la cause."""
+    test_client, chemin = client_qui_plante
+    reponse = test_client.get(chemin)
+    assert reponse.text == "Internal Server Error"
+    assert reponse.headers["content-type"] == "text/plain; charset=utf-8"
+    assert "panne simulée" not in reponse.text
 
 
 # --------------------------------------------------------------------------- #
