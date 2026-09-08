@@ -1,11 +1,23 @@
 import asyncio
+import os
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query
 
 router = APIRouter(prefix="/api/locations", tags=["locations"])
 
-ADRESSE_API = "https://api-adresse.data.gouv.fr"
+# Base Adresse Nationale, servie par la Géoplateforme de l'IGN.
+#
+# L'ancienne adresse ``https://api-adresse.data.gouv.fr`` répond encore, mais
+# renvoie depuis le 31 janvier 2026 les en-têtes HTTP ``Deprecation`` et
+# ``Sunset`` (RFC 8594) pointant vers cet hôte : elle peut être coupée sans
+# préavis. Les deux services renvoient le même GeoJSON, aux mêmes champs, pour
+# les mêmes paramètres.
+#
+# Surchargeable par l'environnement pour permettre un retour arrière immédiat
+# sans redéploiement.
+DEFAULT_ADRESSE_API = "https://data.geopf.fr/geocodage"
+ADRESSE_API = os.environ.get("ADRESSE_API_URL", DEFAULT_ADRESSE_API).rstrip("/")
 REQUEST_TIMEOUT = 5.0
 
 _client: httpx.AsyncClient | None = None
@@ -13,7 +25,7 @@ _client_lock = asyncio.Lock()
 
 
 async def get_client() -> httpx.AsyncClient:
-    """Client HTTP partagé vers l'API adresse de data.gouv.fr.
+    """Client HTTP partagé vers l'API de géocodage de la Géoplateforme.
 
     Instancier un client par requête rouvre une connexion TCP **et** rejoue la
     poignée de main TLS à chaque appel, soit deux allers-retours vers un
@@ -50,7 +62,7 @@ async def close_client() -> None:
 
 @router.get("/search")
 async def search_location(q: str = Query(..., min_length=2)):
-    """Proxy vers api-adresse.data.gouv.fr — recherche d'adresses complètes."""
+    """Proxy vers la Base Adresse Nationale — recherche d'adresses complètes."""
     url = f"{ADRESSE_API}/search/"
     client = await get_client()
     try:
@@ -69,7 +81,7 @@ async def search_location(q: str = Query(..., min_length=2)):
 
 @router.get("/reverse")
 async def reverse_location(lat: float, lng: float):
-    """Proxy vers api-adresse.data.gouv.fr — géocodage inverse."""
+    """Proxy vers la Base Adresse Nationale — géocodage inverse."""
     url = f"{ADRESSE_API}/reverse/"
     client = await get_client()
     try:

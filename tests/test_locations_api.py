@@ -1,6 +1,6 @@
 """Tests du proxy de géocodage ``/api/locations``.
 
-L'API adresse de data.gouv.fr est simulée : aucun appel réseau n'est effectué,
+L'API de géocodage amont est simulée : aucun appel réseau n'est effectué,
 la suite reste donc déterministe et exécutable hors ligne en CI.
 """
 
@@ -34,7 +34,7 @@ class FakeResponse:
 
     def raise_for_status(self):
         if self.status_code >= 400:
-            request = httpx.Request("GET", "https://api-adresse.data.gouv.fr/search/")
+            request = httpx.Request("GET", f"{locations.ADRESSE_API}/search/")
             raise httpx.HTTPStatusError(
                 "erreur amont",
                 request=request,
@@ -97,7 +97,7 @@ def test_search_relaie_la_reponse_amont(client, fake_httpx):
     response = client.get(f"{BASE}/search", params={"q": "rue de rivoli"})
     assert response.status_code == 200
     assert response.json() == REPONSE_SEARCH
-    assert appels[0]["url"] == "https://api-adresse.data.gouv.fr/search/"
+    assert appels[0]["url"] == f"{locations.ADRESSE_API}/search/"
     assert appels[0]["params"]["q"] == "rue de rivoli"
 
 
@@ -143,7 +143,7 @@ def test_reverse_relaie_la_reponse_amont(client, fake_httpx):
     response = client.get(f"{BASE}/reverse", params={"lat": 48.8566, "lng": 2.3522})
     assert response.status_code == 200
     assert response.json() == REPONSE_SEARCH
-    assert appels[0]["url"] == "https://api-adresse.data.gouv.fr/reverse/"
+    assert appels[0]["url"] == f"{locations.ADRESSE_API}/reverse/"
 
 
 def test_reverse_convertit_lng_en_lon_pour_lamont(client, fake_httpx):
