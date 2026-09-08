@@ -4,6 +4,8 @@ L'API adresse de data.gouv.fr est simulée : aucun appel réseau n'est effectué
 la suite reste donc déterministe et exécutable hors ligne en CI.
 """
 
+import asyncio
+
 import httpx
 import pytest
 
@@ -41,18 +43,12 @@ class FakeResponse:
 
 
 class FakeAsyncClient:
-    """Remplace ``httpx.AsyncClient`` : enregistre l'appel et rejoue un scénario."""
+    """Remplace le client partagé : enregistre l'appel et rejoue un scénario."""
 
     appels = []
 
     def __init__(self, comportement):
         self._comportement = comportement
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *exc_info):
-        return False
 
     async def get(self, url, params=None, timeout=None):
         FakeAsyncClient.appels.append({"url": url, "params": params, "timeout": timeout})
@@ -61,13 +57,20 @@ class FakeAsyncClient:
 
 @pytest.fixture
 def fake_httpx(monkeypatch):
-    """Installe un faux client HTTP ; renvoie une fonction de configuration."""
+    """Installe un faux client HTTP ; renvoie une fonction de configuration.
+
+    Le routeur ne construit plus un client par requête : il en réclame un à
+    ``locations.get_client``. C'est donc ce point d'accès qui est simulé.
+    """
     FakeAsyncClient.appels = []
 
     def _installer(comportement):
-        monkeypatch.setattr(
-            locations.httpx, "AsyncClient", lambda: FakeAsyncClient(comportement)
-        )
+        faux = FakeAsyncClient(comportement)
+
+        async def _get_client():
+            return faux
+
+        monkeypatch.setattr(locations, "get_client", _get_client)
         return FakeAsyncClient.appels
 
     return _installer
@@ -174,3 +177,51 @@ def test_reverse_propage_le_code_derreur_amont(client, fake_httpx):
 )
 def test_reverse_parametres_invalides(client, params):
     assert client.get(f"{BASE}/reverse", params=params).status_code == 422
+
+
+# --------------------------------------------------------------------------- #
+# Client partagé
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def client_partage_neuf():
+    """Repart d'un client partagé non initialisé et le referme après le test."""
+    locations._client = None
+    yield
+    asyncio.run(locations.close_client())
+
+
+def test_get_client_reutilise_la_meme_connexion(client_partage_neuf):
+    """La poignée de main TLS ne doit pas être rejouée à chaque frappe clavier."""
+
+    async def scenario():
+        premier = await locations.get_client()
+        second = await locations.get_client()
+        return premier, second
+
+    premier, second = asyncio.run(scenario())
+    assert premier is second
+    assert not premier.is_closed
+
+
+def test_close_client_referme_et_permet_un_nouveau_client(client_partage_neuf):
+    """Après l'arrêt de l'application, un client neuf est reconstruit à la demande."""
+
+    async def scenario():
+        premier = await locations.get_client()
+        await locations.close_client()
+        second = await locations.get_client()
+        return premier, second
+
+    premier, second = asyncio.run(scenario())
+    assert premier.is_closed
+    assert second is not premier
+    assert not second.is_closed
+
+
+def test_close_client_est_idempotent(client_partage_neuf):
+    """Un double arrêt ne doit pas lever."""
+    asyncio.run(locations.close_client())
+    asyncio.run(locations.close_client())
+

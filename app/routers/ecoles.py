@@ -174,6 +174,29 @@ def normalize_permis(raw_value: str) -> str:
     return normalized
 
 
+# Colonnes réellement exposées par ``AutoEcoleResponse``, dans l'ordre de ses
+# champs. Les projeter explicitement évite de matérialiser des entités ORM
+# complètes (carte d'identité, instrumentation d'attributs, suivi des
+# modifications) pour des lignes qui ne sont que lues et sérialisées.
+ECOLE_COLUMNS = (
+    AutoEcole.id,
+    AutoEcole.name,
+    AutoEcole.city,
+    AutoEcole.postal_code,
+    AutoEcole.address,
+    AutoEcole.lat,
+    AutoEcole.lng,
+    AutoEcole.rating,
+    AutoEcole.price,
+    AutoEcole.price_label,
+    AutoEcole.speed_level,
+    AutoEcole.speed_label,
+    AutoEcole.permis_type,
+    AutoEcole.tags,
+    AutoEcole.image_url,
+)
+
+
 @router.get("", response_model=List[AutoEcoleResponse])
 def list_ecoles(
     lat: Optional[float] = Query(None, description="Latitude du point de référence"),
@@ -217,7 +240,7 @@ def list_ecoles(
 
     normalized_permis = normalize_permis(permis) if permis else None
 
-    query = db.query(AutoEcole)
+    query = db.query(*ECOLE_COLUMNS)
 
     # Pré-filtre bounding box en SQL avant le calcul Haversine.
     if lat is not None and lng is not None:
@@ -249,14 +272,46 @@ def list_ecoles(
 
     ecoles = query.all()
 
+    # Le pré-filtre SQL est une boîte englobante : une partie des lignes
+    # remontées dépasse le rayon réel. On tranche la distance avant de
+    # construire l'item, plutôt que d'assembler un dictionnaire jeté juste
+    # après.
+    geolocalise = lat is not None and lng is not None
+
     result = []
-    for ecole in ecoles:
-        item = AutoEcoleResponse.model_validate(ecole).model_dump()
-        if lat is not None and lng is not None:
-            dist = haversine(lat, lng, ecole.lat, ecole.lng)
-            if dist > radius:
+    for row in ecoles:
+        distance = None
+        if geolocalise:
+            distance = haversine(lat, lng, row[5], row[6])
+            if distance > radius:
                 continue
-            item["distance"] = round(dist, 2)
+            distance = round(distance, 2)
+
+        # Construit directement la forme produite par
+        # ``AutoEcoleResponse.model_dump()`` : mêmes clés, même ordre, mêmes
+        # valeurs. ``response_model`` valide toujours le résultat en sortie,
+        # ce qui garantit types et ordre des champs dans le JSON émis.
+        item = {
+            "id": row[0],
+            "name": row[1],
+            "city": row[2],
+            "postal_code": row[3],
+            "address": row[4],
+            "lat": row[5],
+            "lng": row[6],
+            "rating": row[7],
+            "price": row[8],
+            "price_label": row[9],
+            "speed_level": row[10],
+            "speed_label": row[11],
+            "permis_type": row[12],
+            "tags": row[13],
+            "image_url": row[14],
+            "distance": distance,
+            "match_score": None,
+            "match_label": None,
+            "match_reasons": [],
+        }
 
         compute_match(
             item,

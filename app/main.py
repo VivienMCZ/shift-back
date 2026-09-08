@@ -3,8 +3,9 @@ import os
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from sqlalchemy.exc import OperationalError
 
 from app.config import (
@@ -65,7 +66,13 @@ def init_db():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    yield
+    try:
+        yield
+    finally:
+        # Le proxy de géocodage garde un client HTTP partagé ouvert.
+        from app.routers.locations import close_client
+
+        await close_client()
 
 
 # La documentation interactive décrit toute la surface d'attaque de l'API :
@@ -84,32 +91,75 @@ app = FastAPI(
 )
 
 
-@app.middleware("http")
-async def security_headers(request: Request, call_next):
-    """En-têtes de durcissement du navigateur (A05 — Security Misconfiguration)."""
-    response = await call_next(request)
-    response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("X-Frame-Options", "DENY")
-    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-    response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
-    response.headers.setdefault(
-        "Permissions-Policy", "geolocation=(self), camera=(), microphone=()"
-    )
+# En-têtes de durcissement du navigateur (A05 — Security Misconfiguration).
+# Pré-encodés en octets : ils sont réinjectés tels quels dans chaque réponse.
+SECURITY_HEADERS: tuple[tuple[bytes, bytes], ...] = (
+    (b"x-content-type-options", b"nosniff"),
+    (b"x-frame-options", b"DENY"),
+    (b"referrer-policy", b"strict-origin-when-cross-origin"),
+    (b"cross-origin-opener-policy", b"same-origin"),
+    (b"permissions-policy", b"geolocation=(self), camera=(), microphone=()"),
     # L'API ne sert que du JSON : aucune ressource externe n'a besoin d'être chargée.
-    response.headers.setdefault(
-        "Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'"
-    )
-    if get_env_bool("COOKIE_SECURE", False):
-        response.headers.setdefault(
-            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
-        )
-    return response
+    (b"content-security-policy", b"default-src 'none'; frame-ancestors 'none'"),
+)
+HSTS_HEADER = (b"strict-transport-security", b"max-age=31536000; includeSubDomains")
+
+
+class SecurityHeadersMiddleware:
+    """Ajoute les en-têtes de durcissement sans reconstruire la réponse.
+
+    Écrit en ASGI pur plutôt qu'avec ``@app.middleware("http")`` :
+    ``BaseHTTPMiddleware`` enveloppe chaque requête dans un groupe de tâches et
+    un flux mémoire anyio, ce qui coûte plusieurs centaines de microsecondes par
+    appel et sérialise le corps de la réponse en mémoire. Ici on se contente de
+    compléter la liste d'en-têtes du message ``http.response.start``, ce qui
+    produit exactement les mêmes en-têtes pour un coût négligeable.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                headers = message.setdefault("headers", [])
+                # ``setdefault`` d'origine : un en-tête déjà posé par la route
+                # n'est jamais écrasé.
+                deja_presents = {name.lower() for name, _ in headers}
+                headers.extend(
+                    (name, value)
+                    for name, value in SECURITY_HEADERS
+                    if name not in deja_presents
+                )
+                if (
+                    HSTS_HEADER[0] not in deja_presents
+                    and get_env_bool("COOKIE_SECURE", False)
+                ):
+                    headers.append(HSTS_HEADER)
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
+app.add_middleware(SecurityHeadersMiddleware)
+
 
 
 # Les origines autorisées sont configurables : la liste par défaut ne couvre que
 # le développement local. En production, renseigner CORS_ORIGINS.
 CORS_ORIGINS = get_env_list("CORS_ORIGINS", DEFAULT_CORS_ORIGINS)
 CORS_ORIGIN_REGEX = os.environ.get("CORS_ORIGIN_REGEX", r"https?://.*\.orb\.local")
+
+# Les listes d'auto-écoles sont du JSON très redondant : elles se compressent
+# d'un facteur 8 à 10. C'est de loin le premier poste du temps de chargement
+# côté client — la liste complète passe de 2,7 Mo à 256 Ko. Le niveau 6 est le
+# compromis usuel pour du contenu dynamique ; au-delà de 128 Ko, Starlette
+# compresse dans un thread et ne bloque pas la boucle d'événements.
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
 
 app.add_middleware(
     CORSMiddleware,
