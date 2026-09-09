@@ -8,7 +8,9 @@ import os
 
 import jwt
 import pytest
+from fastapi.testclient import TestClient
 
+from app.main import app
 from app.models import User
 from app.routers import auth as auth_module
 from app.security import (
@@ -381,6 +383,57 @@ def test_hsts_absent_en_http(client):
     assert "strict-transport-security" not in client.get("/health").headers
 
 
+@pytest.fixture
+def client_qui_plante():
+    """Client exposant une route qui lève, sans faire remonter l'erreur au test.
+
+    La réponse 500 est fabriquée par ``ServerErrorMiddleware``, monté au-dessus
+    des middlewares applicatifs : c'est le seul chemin de réponse qui ne
+    traverse pas ``SecurityHeadersMiddleware``.
+    """
+    chemin = "/_erreur_de_test"
+
+    @app.get(chemin)
+    def _erreur():
+        raise RuntimeError("panne simulée")
+
+    try:
+        yield TestClient(app, raise_server_exceptions=False), chemin
+    finally:
+        app.router.routes = [
+            route for route in app.router.routes
+            if getattr(route, "path", None) != chemin
+        ]
+
+
+@pytest.mark.parametrize(
+    "entete",
+    [
+        "x-content-type-options",
+        "x-frame-options",
+        "referrer-policy",
+        "cross-origin-opener-policy",
+        "permissions-policy",
+        "content-security-policy",
+    ],
+)
+def test_entetes_de_securite_presents_sur_une_500(client_qui_plante, entete):
+    """A05 — une panne serveur ne doit pas renvoyer une réponse non durcie."""
+    test_client, chemin = client_qui_plante
+    reponse = test_client.get(chemin)
+    assert reponse.status_code == 500
+    assert entete in reponse.headers
+
+
+def test_la_500_garde_le_corps_generique_de_starlette(client_qui_plante):
+    """Le durcissement ne doit pas transformer la réponse ni divulguer la cause."""
+    test_client, chemin = client_qui_plante
+    reponse = test_client.get(chemin)
+    assert reponse.text == "Internal Server Error"
+    assert reponse.headers["content-type"] == "text/plain; charset=utf-8"
+    assert "panne simulée" not in reponse.text
+
+
 # --------------------------------------------------------------------------- #
 # A07 / A09 — Session et journalisation
 # --------------------------------------------------------------------------- #
@@ -487,3 +540,54 @@ def test_affichage_du_code_otp_sur_activation_explicite(capsys, monkeypatch):
     monkeypatch.setenv("OTP_DEBUG_DELIVERY", "true")
     auth_module.deliver_otp("ok@example.com", "123456")
     assert "123456" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------- #
+# A01 — Broken Access Control : portée des en-têtes de cache HTTP
+#
+# ``/api/ecoles`` et ``/api/ecoles/favorites`` partagent le même préfixe de
+# routeur. Le premier est public et gagne à être mis en cache ; le second dépend
+# de l'utilisateur connecté. Poser l'en-tête au niveau du routeur, ou par un
+# middleware sur le préfixe, permettrait à un cache partagé (CDN, proxy) de
+# servir les favoris d'un compte à un autre. Ces tests verrouillent la
+# séparation.
+# --------------------------------------------------------------------------- #
+
+
+def test_liste_des_ecoles_cachable_publiquement(client, make_ecole):
+    make_ecole(name="Auto-école du Centre")
+
+    response = client.get("/api/ecoles")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"].startswith("public")
+
+
+def test_fiche_d_ecole_cachable_publiquement(client, make_ecole):
+    ecole_id = make_ecole(name="Auto-école du Centre")
+
+    response = client.get(f"/api/ecoles/{ecole_id}")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"].startswith("public")
+
+
+def test_favoris_jamais_mis_en_cache(client, login, make_ecole):
+    """Le cœur du risque : une réponse propre à un compte, jamais partagée."""
+    login()
+    make_ecole(name="Auto-école du Centre")
+
+    response = client.get("/api/ecoles/favorites")
+
+    assert response.status_code == 200
+    cache_control = response.headers["cache-control"]
+    assert "no-store" in cache_control
+    assert "public" not in cache_control
+
+
+def test_favoris_non_authentifies_ne_sont_pas_cachables(client):
+    """Un 401 ne doit pas davantage être mémorisé par un cache partagé."""
+    response = client.get("/api/ecoles/favorites")
+
+    assert response.status_code == 401
+    assert "public" not in response.headers.get("cache-control", "")

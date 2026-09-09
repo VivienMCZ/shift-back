@@ -2,7 +2,7 @@ import json
 import math
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import String, cast, or_
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,35 @@ from app.schemas import AutoEcoleResponse, FavoriteCreate
 from app.routers.auth import get_current_user
 
 router = APIRouter(prefix="/api/ecoles", tags=["ecoles"])
+
+# Le catalogue dépasse 50 000 auto-écoles. Sans borne, une requête sans filtre
+# sérialise la table entière : plusieurs mégaoctets que le navigateur doit
+# décompresser, parser puis transformer en composants — le thread principal est
+# bloqué pendant tout ce temps. La page n'est pas lente à charger, elle est
+# occupée. On borne donc par défaut.
+DEFAULT_PAGE_SIZE = 24
+MAX_PAGE_SIZE = 100
+
+# --------------------------------------------------------------------------- #
+# Cache HTTP
+#
+# Le catalogue bouge de temps en temps, jamais d'une seconde a l'autre : une
+# minute de fraicheur suffit largement, et rend instantane un rechargement de
+# page ou un retour arriere — le navigateur repond depuis son cache au lieu de
+# refaire l'aller-retour. ``stale-while-revalidate`` va plus loin : pendant les
+# cinq minutes suivantes, il affiche la copie perimee immediatement et
+# rafraichit en arriere-plan.
+#
+# A01 — ces en-tetes sont poses **par route**, jamais au niveau du routeur.
+# ``/api/ecoles/favorites`` partage ce prefixe et depend, lui, de
+# l'utilisateur : un ``public`` qui deborderait dessus permettrait a un cache
+# partage (CDN, proxy) de servir les favoris d'un compte a un autre.
+CACHE_PUBLIC = "public, max-age=60, stale-while-revalidate=300"
+
+# Reponses propres a un utilisateur : jamais mises en cache, nulle part. Sans
+# en-tete explicite, le navigateur applique une heuristique de fraicheur et peut
+# conserver une reponse authentifiee.
+CACHE_PRIVEE = "private, no-store"
 
 PRICE_SORT_VALUES = {"asc", "desc"}
 SPEED_VALUES = {"rapide", "moyen", "faible"}
@@ -174,6 +203,29 @@ def normalize_permis(raw_value: str) -> str:
     return normalized
 
 
+# Colonnes réellement exposées par ``AutoEcoleResponse``, dans l'ordre de ses
+# champs. Les projeter explicitement évite de matérialiser des entités ORM
+# complètes (carte d'identité, instrumentation d'attributs, suivi des
+# modifications) pour des lignes qui ne sont que lues et sérialisées.
+ECOLE_COLUMNS = (
+    AutoEcole.id,
+    AutoEcole.name,
+    AutoEcole.city,
+    AutoEcole.postal_code,
+    AutoEcole.address,
+    AutoEcole.lat,
+    AutoEcole.lng,
+    AutoEcole.rating,
+    AutoEcole.price,
+    AutoEcole.price_label,
+    AutoEcole.speed_level,
+    AutoEcole.speed_label,
+    AutoEcole.permis_type,
+    AutoEcole.tags,
+    AutoEcole.image_url,
+)
+
+
 @router.get("", response_model=List[AutoEcoleResponse])
 def list_ecoles(
     lat: Optional[float] = Query(None, description="Latitude du point de référence"),
@@ -190,6 +242,14 @@ def list_ecoles(
     permis: Optional[str] = Query(
         None, description="Type de permis: voiture, moto, poids_lourd"
     ),
+    limit: int = Query(
+        DEFAULT_PAGE_SIZE,
+        ge=1,
+        le=MAX_PAGE_SIZE,
+        description="Nombre d'auto-écoles renvoyées (page courante)",
+    ),
+    offset: int = Query(0, ge=0, description="Rang de la première auto-école renvoyée"),
+    response: Response = None,
     db: Session = Depends(get_db),
 ):
     if (lat is None) != (lng is None):
@@ -217,7 +277,7 @@ def list_ecoles(
 
     normalized_permis = normalize_permis(permis) if permis else None
 
-    query = db.query(AutoEcole)
+    query = db.query(*ECOLE_COLUMNS)
 
     # Pré-filtre bounding box en SQL avant le calcul Haversine.
     if lat is not None and lng is not None:
@@ -249,14 +309,46 @@ def list_ecoles(
 
     ecoles = query.all()
 
+    # Le pré-filtre SQL est une boîte englobante : une partie des lignes
+    # remontées dépasse le rayon réel. On tranche la distance avant de
+    # construire l'item, plutôt que d'assembler un dictionnaire jeté juste
+    # après.
+    geolocalise = lat is not None and lng is not None
+
     result = []
-    for ecole in ecoles:
-        item = AutoEcoleResponse.model_validate(ecole).model_dump()
-        if lat is not None and lng is not None:
-            dist = haversine(lat, lng, ecole.lat, ecole.lng)
-            if dist > radius:
+    for row in ecoles:
+        distance = None
+        if geolocalise:
+            distance = haversine(lat, lng, row[5], row[6])
+            if distance > radius:
                 continue
-            item["distance"] = round(dist, 2)
+            distance = round(distance, 2)
+
+        # Construit directement la forme produite par
+        # ``AutoEcoleResponse.model_dump()`` : mêmes clés, même ordre, mêmes
+        # valeurs. ``response_model`` valide toujours le résultat en sortie,
+        # ce qui garantit types et ordre des champs dans le JSON émis.
+        item = {
+            "id": row[0],
+            "name": row[1],
+            "city": row[2],
+            "postal_code": row[3],
+            "address": row[4],
+            "lat": row[5],
+            "lng": row[6],
+            "rating": row[7],
+            "price": row[8],
+            "price_label": row[9],
+            "speed_level": row[10],
+            "speed_label": row[11],
+            "permis_type": row[12],
+            "tags": row[13],
+            "image_url": row[14],
+            "distance": distance,
+            "match_score": None,
+            "match_label": None,
+            "match_reasons": [],
+        }
 
         compute_match(
             item,
@@ -295,15 +387,25 @@ def list_ecoles(
             )
         )
 
-    return result
+    # Le rang d'une auto-école dépend du tri complet : on ne peut découper
+    # qu'ici, une fois l'ordre final connu. Le total part en en-tête pour que le
+    # front puisse construire sa pagination sans second appel.
+    if response is not None:
+        response.headers["X-Total-Count"] = str(len(result))
+        # Route publique : la reponse ne depend d'aucun utilisateur.
+        response.headers["Cache-Control"] = CACHE_PUBLIC
+
+    return result[offset : offset + limit]
 
 
 @router.get("/favorites", response_model=List[AutoEcoleResponse])
 def list_favorites(
+    response: Response,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Liste des auto-écoles likées par l'utilisateur connecté (plus récentes d'abord)."""
+    response.headers["Cache-Control"] = CACHE_PRIVEE
     return (
         db.query(AutoEcole)
         .join(Favorite, Favorite.auto_ecole_id == AutoEcole.id)
@@ -354,8 +456,10 @@ def remove_favorite(
 
 
 @router.get("/{ecole_id}", response_model=AutoEcoleResponse)
-def get_ecole(ecole_id: int, db: Session = Depends(get_db)):
+def get_ecole(ecole_id: int, response: Response, db: Session = Depends(get_db)):
     ecole = db.query(AutoEcole).filter(AutoEcole.id == ecole_id).first()
     if not ecole:
         raise HTTPException(status_code=404, detail="Auto-école non trouvée.")
+    # Fiche publique : c'est elle qu'on rouvre en boucle depuis la liste.
+    response.headers["Cache-Control"] = CACHE_PUBLIC
     return ecole
