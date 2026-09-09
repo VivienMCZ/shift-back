@@ -73,15 +73,22 @@ fi
 # Préparation
 # ---------------------------------------------------------------------------- #
 if [ ! -f .env ]; then
-  log "Génération d'un .env de test (aucun secret réel)"
-  JWT="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+  log "Génération d'un .env de test (valeurs jetables tirées au hasard)"
+  # Tout est généré aléatoirement à chaque exécution : rien n'est écrit en dur
+  # dans le dépôt (un mot de passe littéral, même factice, ferait sonner les
+  # détecteurs de secrets). Ces valeurs ne vivent que le temps du test.
+  gen() { python -c "import secrets; print(secrets.token_urlsafe($1))"; }
   cat > .env <<EOF
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=postgres
+POSTGRES_USER=shift_itest
+POSTGRES_PASSWORD=$(gen 24)
 POSTGRES_DB=postgres
-JWT_SECRET=$JWT
-ADMIN_API_TOKEN=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')
+JWT_SECRET=$(gen 48)
+ADMIN_API_TOKEN=$(gen 32)
 OTP_DEBUG_DELIVERY=false
+# pgAdmin (profil "tools", non démarré ici) : Compose interpole tout le fichier
+# à l'analyse, y compris ce service, donc ses variables requises doivent exister.
+PGADMIN_EMAIL=itest@example.com
+PGADMIN_PASSWORD=$(gen 24)
 EOF
 fi
 
