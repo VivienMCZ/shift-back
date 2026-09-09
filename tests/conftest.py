@@ -37,6 +37,7 @@ from sqlalchemy.orm import sessionmaker  # noqa: E402
 from app.api.models.aide import AideDB, AideSave  # noqa: E402,F401
 from app.database import Base, get_db  # noqa: E402
 from app.routers import auth as auth_module  # noqa: E402
+from app.routers import locations as locations_module  # noqa: E402
 from app.security import hash_otp  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import AutoEcole, Favorite, Lib, User  # noqa: E402,F401
@@ -79,6 +80,10 @@ def clean_tables(engine):
     # test qui sature le quota ferait échouer les suivants.
     auth_module.otp_attempt_limiter.clear()
     auth_module.otp_request_limiter.clear()
+    # Idem pour le cache de géocodage : sans purge, un test rejouant la même
+    # recherche qu'un précédent serait servi depuis la mémoire et n'appellerait
+    # jamais le faux client amont.
+    locations_module.geocode_cache.clear()
     yield
 
 
