@@ -143,8 +143,15 @@ jobs:
           docker run --rm --entrypoint python shift-back:ci \
             -c "import fastapi, sqlalchemy, jwt, httpx; print('imports OK')"
 
-      # Scan des paquets système de l'image de base (informatif : les CVE de
-      # l'image amont ne sont pas toujours corrigeables côté projet).
+      # Scan des paquets de l'image à la recherche de CVE connues.
+      #
+      # Bloquant, mais uniquement sur les vulnérabilités HIGH/CRITICAL pour
+      # lesquelles un correctif existe (``ignore-unfixed: true``). Une CVE de
+      # l'image de base amont sans correctif disponible ne peut pas être réglée
+      # côté projet : la rendre bloquante immobiliserait la CI sur un problème
+      # qu'on ne peut pas résoudre. Dès qu'un correctif paraît, le build échoue
+      # tant que l'image n'est pas reconstruite dessus — c'est le comportement
+      # voulu. Dependabot met à jour l'image de base pour fournir ce correctif.
       - name: Scan Trivy de l'image
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -152,4 +159,71 @@ jobs:
           format: table
           severity: HIGH,CRITICAL
           ignore-unfixed: true
-          exit-code: "0"
+          exit-code: "1"
+          # Exceptions justifiées (findings d'outillage sur des couches de base,
+          # pas les dépendances de l'app). Voir les commentaires du fichier.
+          trivyignores: .trivyignore
+
+      # ---------------------------------------------------------------- #
+      # Test d'intégration de la pile assemblée (db + api en conteneurs)
+      #
+      # La suite pytest tourne sur SQLite/TestClient : elle ne prouve pas que
+      # l'assemblage réel démarre et répond. Ce job démarre les vrais conteneurs
+      # et vérifie de bout en bout le service, la base, le géocodage et les
+      # durcissements de sécurité clés. Un .env de test est généré par le script
+      # (aucun secret réel n'est requis ni exposé au workflow).
+      # ---------------------------------------------------------------- #
+      - name: Test d'intégration Docker Compose
+        run: bash tests/integration/stack_smoke.sh
+
+  # ------------------------------------------------------------------------ #
+  # Chaîne d'approvisionnement : secrets et qualité du Dockerfile (A05/A08)
+  # ------------------------------------------------------------------------ #
+  supply_chain:
+    name: Secrets et Dockerfile
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          # gitleaks scanne l'historique : il lui faut plus que le dernier commit.
+          fetch-depth: 0
+
+      # Détecte une clé, un jeton ou un mot de passe commité par erreur, dans le
+      # dépôt comme dans l'historique.
+      - name: Scan des secrets (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Lint du Dockerfile : utilisateur non-root, versions épinglées, couches
+      # inutiles. Bloquant à partir du niveau error.
+      - name: Lint du Dockerfile (hadolint)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: error
+
+  # ------------------------------------------------------------------------ #
+  # Analyse statique de sécurité du code Python (SAST)
+  #
+  # Symétrique de CodeQL déjà présent côté front. Repère les motifs à risque
+  # (injection, désérialisation, secrets en dur) dans app/.
+  # ------------------------------------------------------------------------ #
+  codeql:
+    name: CodeQL (SAST)
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Initialisation CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+          queries: security-extended
+
+      - name: Analyse CodeQL
+        uses: github/codeql-action/analyze@v3

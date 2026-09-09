@@ -91,7 +91,7 @@ Correctifs appliqués, par catégorie du [Top 10 OWASP](https://owasp.org/www-pr
 
 | Catégorie | Mesure |
 | --- | --- |
-| A01 Broken Access Control | Écriture sur `/api/v1/libs` derrière `X-Admin-Token`, en échec fermé si le jeton n'est pas configuré. Favoris et historique d'aides cloisonnés par utilisateur. |
+| A01 Broken Access Control | Écriture sur `/api/v1/libs` derrière `X-Admin-Token`, en échec fermé si le jeton n'est pas configuré. Favoris et historique d'aides cloisonnés par utilisateur. En-têtes `Cache-Control` posés **par route** : `public` sur la liste et la fiche d'auto-école, `private, no-store` sur `/api/ecoles/favorites`. Poser l'en-tête au niveau du routeur laisserait un cache partagé servir les favoris d'un compte à un autre. |
 | A02 Cryptographic Failures | OTP tirés de `secrets`, stockés en HMAC-SHA256 et jamais en clair. `JWT_SECRET` obligatoire et d'au moins 32 caractères. Cookie `HttpOnly`, `Secure`/`SameSite` configurables. |
 | A03 Injection | Requêtes via l'ORM. Liste blanche stricte sur le paramètre `lang` (sélection de colonne). Jokers SQL neutralisés dans le filtre `gear`. Longueurs et formats bornés sur toutes les entrées. |
 | A04 Insecure Design | Plafonnement des essais d'OTP par compte et des demandes d'envoi par IP. |
@@ -122,15 +122,27 @@ Correctifs appliqués, par catégorie du [Top 10 OWASP](https://owasp.org/www-pr
 
 ## Intégration continue
 
-`.github/workflows/CI.yml` enchaîne quatre jobs :
+`.github/workflows/CI.yml` enchaîne trois jobs :
 
-1. **Tests** — pytest avec couverture, rapports JUnit et Cobertura en artefacts.
-2. **SonarQube** — analyse statique et quality gate. Ignorée tant que le secret
-   `SONAR_TOKEN` n'est pas configuré ; renseigner `sonar.projectKey` et
-   `sonar.organization` dans `sonar-project.properties`.
-3. **Scan des dépendances** — `pip-audit` sur `requirements.txt` (bloquant) et
-   `requirements-dev.txt` (informatif).
-4. **Image Docker** — build, test de fumée des imports, scan Trivy de l'image.
+1. **`ci`** — pytest avec couverture (rapports JUnit et Cobertura en artefacts),
+   SonarQube (ignoré sans `SONAR_TOKEN`), `pip-audit` (bloquant sur
+   `requirements.txt`), build + smoke test + scan Trivy de l'image, puis le
+   **test d'intégration Docker Compose** (`tests/integration/stack_smoke.sh`) :
+   la pile `db` + `api` est démarrée en conteneurs et vérifiée de bout en bout
+   (service, base, géocodage, durcissements de sécurité).
+2. **`supply_chain`** — `gitleaks` (aucun secret commité, historique inclus) et
+   `hadolint` (bonnes pratiques du `Dockerfile`, bloquant au niveau *error*).
+3. **`codeql`** — analyse statique de sécurité (SAST) du code Python, requêtes
+   `security-extended`. Symétrique de CodeQL côté front.
+
+### Lancer le test d'intégration en local
+
+```bash
+bash tests/integration/stack_smoke.sh   # démarre db+api, teste, puis nettoie
+```
+
+Il génère un `.env` de test si absent (aucun secret réel requis) et ne démarre
+que `db` et `api` — le service `front` vit dans un autre dépôt.
 
 `.github/dependabot.yml` ouvre chaque lundi les PR de mise à jour pour pip, les
 actions GitHub et l'image de base Docker.

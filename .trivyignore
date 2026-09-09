@@ -1,0 +1,25 @@
+# Exceptions au scan Trivy — chacune justifiée, à réexaminer à date.
+#
+# Le scan est BLOQUANT (exit-code 1 en CI) sur toute CVE HIGH/CRITICAL corrigeable.
+# Les entrées ci-dessous ne le désactivent pas : elles écartent des findings qui
+# ne portent PAS sur les dépendances réelles de l'application.
+#
+# Contexte : Trivy lit les métadonnées de paquets présentes dans TOUTES les
+# couches de l'image, y compris l'outillage d'empaquetage fourni par l'image de
+# base (`python:3.13-slim`) et les copies vendorisées par pip. Ces copies portent
+# des CVE alors même que les versions RÉELLEMENT installées et utilisées sont
+# déjà à jour :
+#   - msgpack    : réellement installé en 1.2.1 (épinglé dans requirements.txt)
+#   - setuptools : réellement mis à niveau en 84.x (Dockerfile) ; l'app ne
+#                  l'importe même pas à l'exécution.
+# Aucun correctif côté projet ne peut retirer les copies fantômes des couches
+# inférieures : seule une remontée de l'image de base les fera disparaître.
+#
+# À revoir à chaque bump majeur de l'image de base : si la ligne devient inutile
+# (Trivy ne remonte plus le finding), la supprimer.
+
+# msgpack < 1.2.1 — lecture hors bornes. Version réelle : 1.2.1 (corrigée).
+GHSA-6v7p-g79w-8964
+
+# setuptools < 78.1.1 — traversée de chemin. Version réelle : 84.x (corrigée).
+CVE-2025-47273

@@ -7,3 +7,8 @@ psycopg2-binary==2.9.12
 httpx==0.28.1
 python-dotenv==1.2.3
 PyJWT==2.13.0
+
+# Dépendance transitive de uvicorn[standard] (via watchfiles). Épinglée
+# explicitement au-dessus de 1.2.1 : les versions antérieures portent
+# GHSA-6v7p-g79w-8964 (lecture hors bornes), que le scan Trivy bloque.
+msgpack==1.2.1
