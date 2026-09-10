@@ -109,15 +109,27 @@ jobs:
       #
       # Ignorée tant que le secret SONAR_TOKEN n'est pas configuré, afin de
       # ne pas bloquer un dépôt fraîchement cloné ni une PR issue d'un fork.
+      #
+      # Ignorée aussi sur les push de branche autres que main : le plan
+      # gratuit de SonarQube Cloud n'analyse que la branche principale et les
+      # pull requests. Sur un push vers develop, le rapport s'uploade puis la
+      # lecture du quality gate échoue en « Not authorized or project not
+      # found », ce qui fait échouer la CI sans rien apporter. Aucune
+      # couverture n'est perdue : la PR develop -> main analyse les mêmes
+      # commits, quality gate bloquant inclus.
       # ---------------------------------------------------------------- #
       - name: Vérification de la configuration Sonar
         id: sonar_config
         if: always()
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_REF_ANALYSABLE: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' }}
         run: |
           if [ -z "$SONAR_TOKEN" ]; then
             echo "⚠️  SONAR_TOKEN absent : analyse SonarQube ignorée."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          elif [ "$SONAR_REF_ANALYSABLE" != "true" ]; then
+            echo "ℹ️  Push hors main : analyse SonarQube ignorée (plan gratuit = main + PR)."
             echo "configured=false" >> "$GITHUB_OUTPUT"
           else
             echo "configured=true" >> "$GITHUB_OUTPUT"
@@ -130,6 +142,7 @@ jobs:
         uses: SonarSource/sonarqube-scan-action@v8
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}
 
       # ---------------------------------------------------------------- #
