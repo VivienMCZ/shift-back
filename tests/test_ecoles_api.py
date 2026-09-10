@@ -371,3 +371,60 @@ def test_favoris_sont_cloisonnes_par_utilisateur(client, login, make_ecole, db):
     with db() as session:
         alice = session.query(User).filter(User.email == "alice@example.com").one()
         assert session.query(Favorite).filter(Favorite.user_id == alice.id).count() == 1
+
+
+# --------------------------------------------------------------------------- #
+# Pagination
+# --------------------------------------------------------------------------- #
+
+
+def test_pagination_borne_la_reponse_par_defaut(client, make_ecole):
+    """Sans ``limit``, la réponse est bornée : le catalogue complet dépasse
+    50 000 lignes et saturait le navigateur."""
+    for i in range(30):
+        make_ecole(name=f"École {i:02d}", price=700 + i)
+
+    response = client.get("/api/ecoles")
+    assert response.status_code == 200
+    assert len(response.json()) == 24
+    assert response.headers["X-Total-Count"] == "30"
+
+
+def test_pagination_limit_et_offset_decoupent_le_meme_ordre(client, make_ecole):
+    for i in range(10):
+        make_ecole(name=f"École {i:02d}", price=700 + i)
+
+    complet = noms(client.get("/api/ecoles?price_sort=asc&limit=100"))
+    page1 = noms(client.get("/api/ecoles?price_sort=asc&limit=4&offset=0"))
+    page2 = noms(client.get("/api/ecoles?price_sort=asc&limit=4&offset=4"))
+
+    assert len(complet) == 10
+    assert page1 == complet[:4]
+    assert page2 == complet[4:8]
+
+
+def test_pagination_offset_au_dela_du_total_renvoie_une_page_vide(client, make_ecole):
+    make_ecole(name="École A")
+    response = client.get("/api/ecoles?offset=50")
+    assert response.status_code == 200
+    assert response.json() == []
+    assert response.headers["X-Total-Count"] == "1"
+
+
+def test_total_count_compte_apres_filtrage(client, make_ecole):
+    """L'en-tête reflète le total filtré, pas la taille de la table."""
+    for i in range(5):
+        make_ecole(name=f"Chère {i}", price=1900)
+    for i in range(3):
+        make_ecole(name=f"Abordable {i}", price=800)
+
+    response = client.get("/api/ecoles?budget_max=1000&limit=2")
+    assert len(response.json()) == 2
+    assert response.headers["X-Total-Count"] == "3"
+
+
+@pytest.mark.parametrize(
+    "params", ["limit=0", "limit=101", "limit=-1", "offset=-1", "limit=abc"]
+)
+def test_pagination_parametres_invalides(client, params):
+    assert client.get(f"/api/ecoles?{params}").status_code == 422

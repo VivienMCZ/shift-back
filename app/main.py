@@ -197,6 +197,10 @@ app.add_middleware(
     # par les navigateurs et masquerait une mauvaise configuration.
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-Admin-Token"],
+    # Sans cette liste, le navigateur masque les en-têtes de réponse non
+    # standard au code JavaScript : le front lirait ``X-Total-Count`` comme
+    # absent et ne saurait pas combien de pages existent.
+    expose_headers=["X-Total-Count"],
     max_age=600,
 )
 

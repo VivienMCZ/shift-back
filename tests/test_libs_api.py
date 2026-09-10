@@ -40,6 +40,88 @@ def test_detail_cle_inconnue(client):
 
 
 # --------------------------------------------------------------------------- #
+# Dictionnaire complet
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "lang,attendu",
+    [("fr", {"home.title": "Accueil", "nav.back": "Retour"}),
+     ("en", {"home.title": "Home", "nav.back": "Back"})],
+)
+def test_dictionnaire_complet(client, make_lib, lang, attendu):
+    make_lib(key="home.title", fr="Accueil", en="Home")
+    make_lib(key="nav.back", fr="Retour", en="Back")
+    response = client.get(f"{BASE}/dictionary", params={"lang": lang})
+    assert response.status_code == 200
+    assert response.json() == attendu
+
+
+def test_dictionnaire_langue_par_defaut_est_langlais(client, make_lib):
+    make_lib(key="home.title", fr="Accueil", en="Home")
+    assert client.get(f"{BASE}/dictionary").json() == {"home.title": "Home"}
+
+
+@pytest.mark.parametrize("lang", ["de", "id", "created_at", "FR"])
+def test_dictionnaire_langue_non_supportee(client, make_lib, lang):
+    """``lang`` sert d'attribut de colonne : la liste blanche est le garde-fou."""
+    make_lib(key="home.title")
+    response = client.get(f"{BASE}/dictionary", params={"lang": lang})
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Langue non supportée"
+
+
+def test_dictionnaire_vide(client):
+    response = client.get(f"{BASE}/dictionary")
+    assert response.status_code == 200
+    assert response.json() == {}
+
+
+def test_dictionnaire_revalide_en_304(client, make_lib):
+    make_lib(key="home.title", fr="Accueil", en="Home")
+    premiere = client.get(f"{BASE}/dictionary", params={"lang": "fr"})
+    etag = premiere.headers["etag"]
+    assert "max-age" in premiere.headers["cache-control"]
+
+    seconde = client.get(
+        f"{BASE}/dictionary", params={"lang": "fr"}, headers={"If-None-Match": etag}
+    )
+    assert seconde.status_code == 304
+    assert seconde.content == b""
+    assert seconde.headers["etag"] == etag
+
+
+def test_dictionnaire_etag_change_quand_le_texte_change(client, make_lib, admin_headers):
+    make_lib(key="home.title", fr="Accueil", en="Home")
+    etag = client.get(f"{BASE}/dictionary", params={"lang": "fr"}).headers["etag"]
+
+    client.put(
+        f"{BASE}/home.title",
+        json={"fr": "Bienvenue"},
+        headers=admin_headers,
+    )
+
+    apres = client.get(
+        f"{BASE}/dictionary", params={"lang": "fr"}, headers={"If-None-Match": etag}
+    )
+    assert apres.status_code == 200
+    assert apres.json() == {"home.title": "Bienvenue"}
+    assert apres.headers["etag"] != etag
+
+
+def test_dictionnaire_etag_differe_selon_la_langue(client, make_lib):
+    make_lib(key="home.title", fr="Accueil", en="Home")
+    fr = client.get(f"{BASE}/dictionary", params={"lang": "fr"})
+    en = client.get(
+        f"{BASE}/dictionary",
+        params={"lang": "en"},
+        headers={"If-None-Match": fr.headers["etag"]},
+    )
+    assert en.status_code == 200
+    assert en.json() == {"home.title": "Home"}
+
+
+# --------------------------------------------------------------------------- #
 # Traduction
 # --------------------------------------------------------------------------- #
 

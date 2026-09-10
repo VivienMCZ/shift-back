@@ -9,12 +9,14 @@ Le contrôle échoue en position fermée : si ``ADMIN_API_TOKEN`` n'est pas
 configuré, aucune écriture n'est possible.
 """
 
+import hashlib
 import hmac
+import json
 import logging
 import os
 from typing import List
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -55,6 +57,52 @@ def require_admin(x_admin_token: str | None = Header(default=None)) -> None:
 def get_libs(db: Session = Depends(get_db)):
     libs = db.query(Lib).all()
     return libs
+
+
+# Le front a besoin de la quasi-totalité du dictionnaire dès le premier rendu :
+# le récupérer clé par clé produisait ~80 requêtes en parallèle sur l'écran du
+# comparateur, chacune avec son aller-retour réseau, son ouverture de session et
+# sa validation. Le catalogue complet tient en quelques dizaines de kilo-octets
+# (une centaine de clés, deux langues) : on le sert d'un bloc.
+DICTIONARY_MAX_AGE = 300
+
+
+@router.get("/dictionary")
+def get_dictionary(
+    lang: str = "en",
+    if_none_match: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    """Renvoie ``{clé: texte}`` pour toute la langue demandée.
+
+    Déclarée avant ``/{key}`` : les routes sont évaluées dans l'ordre de
+    déclaration, ``/dictionary`` serait sinon capturé comme une clé.
+
+    La réponse porte un ETag fort calculé sur le corps émis. Les libellés ne
+    changent qu'au rythme des écritures d'administration : le navigateur peut
+    donc les garder et revalider en ``304`` sans corps.
+    """
+    if lang not in SUPPORTED_LANGUAGES:
+        raise HTTPException(status_code=400, detail="Langue non supportée")
+
+    column = getattr(Lib, lang)
+    # Deux colonnes projetées, pas d'entité ORM : ces lignes ne sont que lues et
+    # sérialisées, l'instrumentation d'attributs et le suivi des modifications
+    # seraient du travail perdu.
+    textes = {key: text for key, text in db.query(Lib.key, column).all()}
+
+    corps = json.dumps(textes, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    etag = f'"{hashlib.sha256(corps).hexdigest()[:32]}"'
+    entetes = {
+        "ETag": etag,
+        "Cache-Control": f"public, max-age={DICTIONARY_MAX_AGE}, must-revalidate",
+    }
+
+    # ``If-None-Match`` peut lister plusieurs ETags séparés par des virgules.
+    if if_none_match and etag in {v.strip() for v in if_none_match.split(",")}:
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=entetes)
+
+    return Response(content=corps, media_type="application/json", headers=entetes)
 
 
 @router.get("/{key}/translate")

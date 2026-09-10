@@ -13,6 +13,13 @@ WORKDIR /app
 # Copy the requirements file into the container at /app
 COPY requirements.txt .
 
+# Met à niveau l'outillage d'empaquetage AVANT d'installer les dépendances.
+# ``pip`` et ``setuptools`` fournis par l'image de base traînent des CVE
+# (ex. CVE-2025-47273 sur setuptools) que le scan Trivy bloque désormais. Ils ne
+# servent qu'à l'installation, pas à l'exécution, mais leurs métadonnées restent
+# dans l'image et sont scannées : on les rafraîchit pour rester sans CVE connue.
+RUN pip install --no-cache-dir --upgrade pip setuptools
+
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
