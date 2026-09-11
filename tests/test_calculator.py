@@ -6,16 +6,17 @@ factices exposant les mêmes attributs que ``AideDB``.
 
 import pytest
 
-from app.api.aide_calculator import CalculateurAides
+from app.api.aide_calculator import CATEGORIE_PRET, CalculateurAides
 from app.api.models.user_profile import UserProfile
 
 
 class FakeAide:
     """Aide en mémoire, avec les mêmes attributs que ``AideDB``."""
 
-    def __init__(self, nom="Aide", montant=None, **criteres):
+    def __init__(self, nom="Aide", montant=None, categorie="Nationale", **criteres):
         self.nom = nom
         self.montant = montant
+        self.categorie = categorie
         self.age_min = criteres.get("age_min")
         self.age_max = criteres.get("age_max")
         self.region = criteres.get("region")
@@ -50,7 +51,7 @@ def executer(user, aides):
 
 def test_aucune_aide_disponible():
     resultat = executer(profil(), [])
-    assert resultat == {"aides": [], "total_potentiel": 0}
+    assert resultat == {"aides": [], "total_potentiel": 0, "total_prets": 0}
 
 
 def test_aide_sans_critere_est_toujours_eligible():
@@ -247,3 +248,51 @@ def test_selection_parmi_un_catalogue_mixte():
 
     assert sorted(a.nom for a in resultat["aides"]) == ["CPF", "Permis à 1 €"]
     assert resultat["total_potentiel"] == 2100.0
+
+
+# --------------------------------------------------------------------------- #
+# Prêts
+# --------------------------------------------------------------------------- #
+
+
+def test_un_pret_est_propose_mais_compte_a_part():
+    """Un prêt se rembourse : l'additionner aux aides gonflerait le total."""
+    aides = [
+        FakeAide(nom="Aide", montant=500.0),
+        FakeAide(nom="Permis à 1 €", montant=1200.0, categorie=CATEGORIE_PRET),
+    ]
+    resultat = executer(profil(), aides)
+    assert len(resultat["aides"]) == 2
+    assert resultat["total_potentiel"] == 500.0
+    assert resultat["total_prets"] == 1200.0
+
+
+# --------------------------------------------------------------------------- #
+# Statuts complémentaires
+# --------------------------------------------------------------------------- #
+
+
+def test_chomeur_est_un_alias_de_demandeur_emploi():
+    """Le front envoyait ``chomeur`` : le CPF restait invisible aux demandeurs d'emploi."""
+    aide = FakeAide(statut_requis=["salarie", "demandeur_emploi"])
+    assert len(executer(profil(statut="chomeur"), [aide])["aides"]) == 1
+
+
+@pytest.mark.parametrize(
+    "situation,statut_requis",
+    [
+        ("reserviste", "reserve_militaire"),
+        ("secteur_btp", "salarie_btp"),
+        ("secteur_hcr", "salarie_hcr"),
+    ],
+)
+def test_situation_cumulable_ouvre_le_statut_correspondant(situation, statut_requis):
+    aide = FakeAide(statut_requis=[statut_requis])
+    assert executer(profil(statut="apprenti"), [aide])["aides"] == []
+    avec = profil(statut="apprenti", **{situation: True})
+    assert len(executer(avec, [aide])["aides"]) == 1
+
+
+def test_situation_cumulable_conserve_le_statut_principal():
+    aide = FakeAide(statut_requis=["etudiant"])
+    assert len(executer(profil(statut="etudiant", reserviste=True), [aide])["aides"]) == 1
