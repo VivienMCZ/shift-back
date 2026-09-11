@@ -91,7 +91,7 @@ Correctifs appliqués, par catégorie du [Top 10 OWASP](https://owasp.org/www-pr
 
 | Catégorie | Mesure |
 | --- | --- |
-| A01 Broken Access Control | Écriture sur `/api/v1/libs` derrière `X-Admin-Token`, en échec fermé si le jeton n'est pas configuré. Favoris et historique d'aides cloisonnés par utilisateur. En-têtes `Cache-Control` posés **par route** : `public` sur la liste et la fiche d'auto-école, `private, no-store` sur `/api/ecoles/favorites`. Poser l'en-tête au niveau du routeur laisserait un cache partagé servir les favoris d'un compte à un autre. |
+| A01 Broken Access Control | Écriture sur `/api/v1/libs` derrière `X-Admin-Token`, en échec fermé si le jeton n'est pas configuré. Favoris, historique d'aides, export et effacement RGPD cloisonnés par utilisateur (une recherche d'un autre compte répond `404`, pas `403`). En-têtes `Cache-Control` posés **par route** : `public` sur la liste et la fiche d'auto-école, `private, no-store` sur `/api/ecoles/favorites`, `/api/v1/aides/saves` et `/auth/me/export`. Poser l'en-tête au niveau du routeur laisserait un cache partagé servir les favoris d'un compte à un autre. |
 | A02 Cryptographic Failures | OTP tirés de `secrets`, stockés en HMAC-SHA256 et jamais en clair. `JWT_SECRET` obligatoire et d'au moins 32 caractères. Cookie `HttpOnly`, `Secure`/`SameSite` configurables. |
 | A03 Injection | Requêtes via l'ORM. Liste blanche stricte sur le paramètre `lang` (sélection de colonne). Jokers SQL neutralisés dans le filtre `gear`. Longueurs et formats bornés sur toutes les entrées. |
 | A04 Insecure Design | Plafonnement des essais d'OTP par compte et des demandes d'envoi par IP. |
@@ -116,9 +116,35 @@ Correctifs appliqués, par catégorie du [Top 10 OWASP](https://owasp.org/www-pr
 - **Pas d'outil de migration.** Le schéma est créé par `create_all` : toute
   nouvelle colonne sur une base existante devra passer par un `ALTER TABLE`
   manuel. Alembic est le prochain jalon naturel.
-- **Deux jeux de données de seed.** `app/seed.py` (utilisé au démarrage) contient
-  10 aides, `app/data_seed.py` en contient 34. Les deux sources doivent être
-  fusionnées.
+- **Aides locales approximées au département.** Le calculateur ne connaît que le
+  code postal : les aides d'une commune ou d'une métropole (Clermont-Ferrand,
+  Toulon) sont proposées dans tout leur département, leur nom précisant le
+  périmètre réel.
+
+## Catalogue d'aides
+
+`app/seed.py` est la **seule source** du catalogue : à chaque démarrage,
+`sync_aides` insère les aides manquantes et réaligne les existantes par nom. Une
+aide ajoutée à la main en base est conservée ; seules celles listées dans
+`AIDES_RETIREES` (supprimées par la loi de finances 2026, ou doublons de l'ancien
+`data_seed.py`) sont effacées. Les recherches déjà sauvegardées n'en dépendent
+pas : elles gardent une copie figée des aides obtenues.
+
+Les aides de catégorie `Prêt` (remboursables) sont proposées mais totalisées à
+part (`total_prets`), hors de `total_potentiel`.
+
+## Données personnelles (RGPD)
+
+| Droit | Route |
+| --- | --- |
+| Accès et portabilité | `GET /auth/me/export` — compte, favoris et recherches, en JSON |
+| Rectification | `PUT /auth/me` — prénom, nom, téléphone (`""` le retire), âge, statut, code postal |
+| Effacement | `DELETE /auth/me` — compte, favoris et historique, dans la même transaction |
+| Effacement partiel | `DELETE /api/v1/aides/saves/{id}` |
+
+Une recherche déclarant une RQTH (donnée de santé, article 9) **n'est jamais
+sauvegardée** : la liste des aides obtenues trahirait le handicap même sans le
+champ lui-même.
 
 ## Intégration continue
 
