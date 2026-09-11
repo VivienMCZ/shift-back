@@ -1,3 +1,4 @@
+from app.api.aide_calculator import CATEGORIE_PRET
 from app.api.models.aide import AideDB
 from app.database import SessionLocal
 from app.models import AutoEcole, Lib
@@ -6,7 +7,9 @@ from app.models import AutoEcole, Lib
 AIDES = [
     # ── Aides nationales ──────────────────────────────────────────────
     {
-        "categorie": "Nationale",
+        # Prêt à taux zéro : il se rembourse, il n'entre donc pas dans le
+        # total des aides (voir ``CATEGORIE_PRET``).
+        "categorie": CATEGORIE_PRET,
         "nom": "Permis à 1 € par jour",
         "description": "Prêt à taux zéro dont les intérêts sont pris en charge par l'État. "
                        "Montant de 600 €, 800 €, 1 000 € ou 1 200 € selon la formation choisie. "
@@ -177,6 +180,276 @@ AIDES = [
         "formation_qualifiante_requise": False,
         "montant": 500.0,
     },
+    # ── Reprises de l'ancien ``data_seed.py`` ─────────────────────────
+    # Les critères booléens absents valent ``False`` (``AIDE_DEFAUTS``).
+    # ``departement`` porte un code (« 59 », « 971 ») : c'est ce que le
+    # calculateur déduit du code postal.
+    {
+        "categorie": "Nationale",
+        "nom": "CPF — Permis C/D (poids lourd, bus)",
+        "description": "Aide via le Compte Personnel de Formation (CPF) pour les permis poids lourd (C/D). "
+                       "Accessible à tous les actifs (salariés, demandeurs d'emploi, indépendants). "
+                       "Montant selon solde CPF, souvent entre 1 500 € et 3 000 €. Non soumis aux restrictions 2026. "
+                       "Organisme : Caisse des Dépôts.",
+        "url_demande": "https://www.moncompteformation.gouv.fr",
+        "statut_requis": ["salarie", "demandeur_emploi", "interimaire", "autre"],
+    },
+    {
+        "categorie": "Nationale",
+        "nom": "CEJ — Contrat d'Engagement Jeune",
+        "description": "Financement du permis possible dans le cadre du Contrat d'Engagement Jeune (CEJ) pour les "
+                       "jeunes de 16 à 25 ans sans emploi ni formation. Le permis doit être identifié comme un levier "
+                       "d'insertion. Organisme : France Travail / Mission Locale.",
+        "age_min": 16,
+        "age_max": 25,
+        "statut_requis": ["jeune_insertion"],
+    },
+    {
+        "categorie": "Nationale",
+        "nom": "SNU — Service National Universel",
+        "description": "Code de la route gratuit et remboursement de la 1ère présentation (~30 €) pour les jeunes "
+                       "de 15 à 17 ans ayant effectué le séjour de cohésion du Service National Universel (SNU). "
+                       "Organisme : Ministère / SNU.",
+        "url_demande": "https://www.snu.gouv.fr",
+        "age_min": 15,
+        "age_max": 17,
+    },
+    {
+        "categorie": "Nationale",
+        "nom": "Aide Réservistes militaires",
+        "description": "Aide de 1 000 € pour les jeunes engagés dans la réserve militaire (jusqu'à 25 ans). "
+                       "Nécessite un minimum de 50 jours d'activité effectués et ne pas posséder le permis B. "
+                       "Organisme : Ministère des Armées.",
+        "age_max": 25,
+        "statut_requis": ["reserve_militaire"],
+    },
+    {
+        "categorie": "Sectorielle",
+        "nom": "Pro BTP — Apprentis du bâtiment",
+        "description": "Aide jusqu'à 600 € pour les apprentis du bâtiment et des travaux publics (15-29 ans). "
+                       "Selon conditions OPCO. Organisme : Pro BTP.",
+        "url_demande": "https://www.probtp.com",
+        "age_min": 15,
+        "age_max": 29,
+        "statut_requis": ["salarie_btp"],
+    },
+    {
+        "categorie": "Sectorielle",
+        "nom": "HCRprévoyance — Hôtels-Cafés-Restaurants",
+        "description": "Aide variable pour les salariés de la branche Hôtels-Cafés-Restaurants (HCR). "
+                       "Conditions selon convention collective. Organisme : HCRprévoyance.",
+        "url_demande": "https://www.hcrprevoyance.fr",
+        "statut_requis": ["salarie_hcr"],
+    },
+    {
+        "categorie": CATEGORIE_PRET,
+        "nom": "FASTT — Atout Permis (intérimaires)",
+        "description": "Microcrédit social accompagné et parcours d'accompagnement spécifique pour les salariés "
+                       "intérimaires exclus du crédit classique. Ce n'est pas une subvention directe. Organisme : FASTT.",
+        "url_demande": "https://www.fastt.org",
+        "statut_requis": ["interimaire"],
+    },
+    {
+        "categorie": "Sectorielle",
+        "nom": "OPCO / branche professionnelle",
+        "description": "Cofinancement du CPF variable selon l'OPCO de l'entreprise pour les salariés. Minimum 100 €. "
+                       "À négocier avec l'employeur ou le service RH. Organisme : OPCO de l'entreprise.",
+        "statut_requis": ["salarie"],
+    },
+    {
+        "categorie": "Handicap",
+        "nom": "AGEFIPH — Aide à la mobilité (déplacements)",
+        "description": "Aide de l'AGEFIPH jusqu'à 12 000 € pour les personnes reconnues handicapées : équipements "
+                       "adaptés, taxis, transports adaptés liés à l'emploi. Organisme : AGEFIPH.",
+        "url_demande": "https://www.agefiph.fr",
+        "handicap_requis": True,
+    },
+    {
+        "categorie": "Handicap",
+        "nom": "PCH — Prestation de Compensation du Handicap",
+        "description": "Prestation de Compensation du Handicap (PCH). Peut couvrir l'aménagement de véhicule jusqu'à "
+                       "10 000 € (surcoût au-delà de 1 500 €). Complémentaire à l'AGEFIPH. "
+                       "Organisme : Conseil Départemental (MDPH).",
+        "handicap_requis": True,
+    },
+    {
+        "categorie": "Régionale",
+        "nom": "Île-de-France — Chèque permis LABAZ",
+        "description": "Chèque permis LABAZ de la Région Île-de-France jusqu'à 1 300 € pour les jeunes en insertion "
+                       "(18-25 ans) résidant en Île-de-France. Organisme : Région Île-de-France.",
+        "url_demande": "https://www.iledefrance.fr",
+        "age_min": 18,
+        "age_max": 25,
+        "region": "Île-de-France",
+        "statut_requis": ["jeune_insertion"],
+    },
+    {
+        "categorie": "Régionale",
+        "nom": "Occitanie — Carte Jeune Région (CAP ou Bac Pro)",
+        "description": "Aide de la Région Occitanie jusqu'à 500 € pour les jeunes (16-20 ans) en dernière année de "
+                       "CAP ou Bac Pro, titulaires de la Carte Jeune Région Occitanie. Organisme : Région Occitanie.",
+        "url_demande": "https://www.laregion.fr",
+        "age_min": 16,
+        "age_max": 20,
+        "region": "Occitanie",
+        # Un élève de CAP ou de Bac Pro se déclare lycéen plus souvent
+        # qu'étudiant : l'ancien seed n'acceptait que le second.
+        "statut_requis": ["lyceen", "etudiant"],
+    },
+    {
+        "categorie": "Régionale",
+        "nom": "Grand Est — Formation qualifiante",
+        "description": "Aide de 1 000 € de la Région Grand Est pour les jeunes (16-30 ans) en formation qualifiante. "
+                       "Le permis doit être lié au projet de formation. Organisme : Région Grand Est.",
+        "url_demande": "https://www.grandest.fr",
+        "age_min": 16,
+        "age_max": 30,
+        "region": "Grand Est",
+        "formation_qualifiante_requise": True,
+    },
+    {
+        "categorie": "Régionale",
+        "nom": "Nouvelle-Aquitaine — Aide insertion jeunes",
+        "description": "Aide de la Région Nouvelle-Aquitaine de 400 € à 1 200 € pour les jeunes diplômés en insertion "
+                       "professionnelle (17-25 ans). Demande possible 2 mois après le diplôme. "
+                       "Organisme : Région Nouvelle-Aquitaine.",
+        "url_demande": "https://les-aides.nouvelle-aquitaine.fr",
+        "age_min": 17,
+        "age_max": 25,
+        "region": "Nouvelle-Aquitaine",
+        "statut_requis": ["jeune_insertion"],
+    },
+    {
+        "categorie": "Régionale",
+        "nom": "Auvergne-Rhône-Alpes — Aide jeunes",
+        "description": "Aide directe de 150 € de la Région Auvergne-Rhône-Alpes pour les jeunes (17-19 ans) résidant "
+                       "en AuRA et inscrits au permis B. Aide complémentaire possible jusqu'à 500 € via PASS'Région "
+                       "(bénévolat). Organisme : Région AuRA.",
+        "url_demande": "https://www.auvergnerhonealpes.fr",
+        "age_min": 17,
+        "age_max": 19,
+        "region": "Auvergne-Rhône-Alpes",
+    },
+    {
+        "categorie": "Régionale",
+        "nom": "PACA — Métropole Toulon Provence Méditerranée",
+        "description": "Aide de la Métropole Toulon Provence Méditerranée jusqu'à 550 € (plus 200 € complémentaires) "
+                       "pour les jeunes en insertion (18-25 ans) résidant dans l'une des communes de la métropole. "
+                       "Organisme : Métropole TPM.",
+        "url_demande": "https://www.metropoletpm.fr",
+        "age_min": 18,
+        "age_max": 25,
+        # Le calculateur ne connaît que le code postal, pas la commune : l'aide
+        # est proposée dans tout le Var, le nom précise le périmètre réel.
+        "departement": "83",
+        "statut_requis": ["jeune_insertion"],
+    },
+    {
+        "categorie": "Régionale",
+        "nom": "Bretagne — Aide régionale permis",
+        "description": "Aide de la Région Bretagne pour les jeunes (16-25 ans) en insertion ou en formation. "
+                       "Montant variable selon la situation. Organisme : Région Bretagne.",
+        "url_demande": "https://www.bretagne.bzh",
+        "age_min": 16,
+        "age_max": 25,
+        "region": "Bretagne",
+        "statut_requis": ["jeune_insertion", "etudiant"],
+    },
+    {
+        "categorie": "Régionale",
+        "nom": "Hauts-de-France — Aide au permis",
+        "description": "Aide de la Région Hauts-de-France jusqu'à 500 € pour les jeunes en insertion ou demandeurs "
+                       "d'emploi (16-25 ans). Organisme : Région Hauts-de-France.",
+        "url_demande": "https://www.hautsdefrance.fr",
+        "age_min": 16,
+        "age_max": 25,
+        "region": "Hauts-de-France",
+        "statut_requis": ["jeune_insertion", "demandeur_emploi"],
+    },
+    {
+        "categorie": "Régionale",
+        "nom": "Autres régions (Normandie, Pays de la Loire, etc.)",
+        "description": "Aide régionale variable (300-800 €) pour les jeunes en insertion. Chaque région a ses propres "
+                       "critères : renseignez-vous auprès de votre Conseil Régional.",
+        "statut_requis": ["jeune_insertion"],
+    },
+    {
+        "categorie": "Départementale",
+        "nom": "Nord (59) — Aide insertion",
+        "description": "Aide à l'insertion du Département du Nord jusqu'à 600 € pour les jeunes en insertion "
+                       "(18-25 ans). Organisme : Département du Nord.",
+        "url_demande": "https://www.nordpass.fr",
+        "age_min": 18,
+        "age_max": 25,
+        "departement": "59",
+        "statut_requis": ["jeune_insertion"],
+    },
+    {
+        "categorie": "Départementale",
+        "nom": "Guadeloupe (971) — Aide demandeurs d'emploi",
+        "description": "Aide du Département de la Guadeloupe de 400 € pour les jeunes demandeurs d'emploi "
+                       "(18-25 ans). Organisme : Département de la Guadeloupe.",
+        "age_min": 18,
+        "age_max": 25,
+        "departement": "971",
+        "statut_requis": ["demandeur_emploi"],
+    },
+    {
+        "categorie": "Locale",
+        "nom": "Clermont-Ferrand — Aide municipale",
+        "description": "Aide municipale de 300 € de la Ville de Clermont-Ferrand pour les jeunes (18-25 ans) "
+                       "habitant la commune, sous conditions de ressources. Organisme : Ville de Clermont-Ferrand.",
+        "age_min": 18,
+        "age_max": 25,
+        # Même limite que la métropole TPM : proposée dans tout le Puy-de-Dôme.
+        "departement": "63",
+    },
+    {
+        "categorie": CATEGORIE_PRET,
+        "nom": "Microcrédit personnel accompagné",
+        "description": "Microcrédit personnel accompagné jusqu'à 5 000 € (taux réduit) pour les personnes exclues du "
+                       "crédit bancaire classique. Accompagnement social inclus. "
+                       "Organisme : ADIE, Croix-Rouge, Secours Catholique, CCAS.",
+        "url_demande": "https://www.adie.org",
+        "statut_requis": ["demandeur_emploi", "jeune_insertion"],
+    },
+]
+
+# Valeurs des colonnes absentes d'une entrée d'``AIDES``. Chaque synchronisation
+# réécrit toutes les colonnes : sans ces défauts, retirer un critère d'une
+# entrée le laisserait en place en base.
+AIDE_DEFAUTS = {
+    "url_demande": None,
+    "age_min": None,
+    "age_max": None,
+    "region": None,
+    "departement": None,
+    "commune": None,
+    "statut_requis": None,
+    "handicap_requis": False,
+    "boursier_requis": False,
+    "inscrit_france_travail_requis": False,
+    "rsa_requis": False,
+    "formation_qualifiante_requise": False,
+    "montant": None,
+}
+
+# Aides que l'ancien ``data_seed.py`` a pu écrire en base et qui ne doivent plus
+# être proposées : supprimées par la loi de finances 2026, ou doublons d'une
+# entrée d'``AIDES`` sous un autre nom. Les recherches déjà sauvegardées n'en
+# dépendent pas : elles gardent une copie figée des aides obtenues.
+AIDES_RETIREES = [
+    "Aide France Travail (ex-Pôle Emploi)",  # supprimée au 1er avril 2026
+    "Aide 500 € pour les apprentis",  # supprimée par la loi de finances 2026
+    "CPF — Permis B (demandeurs d'emploi)",
+    "CPF — Permis B (salariés)",
+    "AGEFIPH — Aide au surcoût permis B",
+    "FAJ — Fonds d'Aide aux Jeunes",
+    "Bourse au permis — Communes (national)",
+    "RSA — Prise en charge possible via CD ou ML",
+    "Aide CROUS / Université",
+    "Microcrédit FASTT (intérimaires)",
+    "Hauts-de-France",  # renommée « Hauts-de-France — Aide au permis »
 ]
 
 
@@ -853,6 +1126,43 @@ LIBS = [
     {"key": "auth.btn.verify", "fr": "Vérifier et se connecter", "en": "Verify and log in"}
 ]
 
+def sync_aides(db):
+    """Aligne la table ``aides`` sur ``AIDES``, par nom.
+
+    Contrairement aux libellés (modifiables par l'API d'administration) et aux
+    auto-écoles, le catalogue d'aides n'a pas d'autre source que ce fichier : il
+    fait donc foi, y compris pour les lignes existantes. Sans cela, corriger un
+    critère ici ne changeait rien sur une base déjà remplie — c'est ainsi que
+    les deux fichiers de seed avaient divergé.
+    """
+    en_base = {aide.nom: aide for aide in db.query(AideDB).all()}
+    inserees = mises_a_jour = 0
+
+    for data in AIDES:
+        champs = {**AIDE_DEFAUTS, **data}
+        aide = en_base.get(champs["nom"])
+        if aide is None:
+            db.add(AideDB(**champs))
+            inserees += 1
+            continue
+        modifie = False
+        for colonne, valeur in champs.items():
+            if getattr(aide, colonne) != valeur:
+                setattr(aide, colonne, valeur)
+                modifie = True
+        mises_a_jour += modifie
+
+    retirees = (
+        db.query(AideDB)
+        .filter(AideDB.nom.in_(AIDES_RETIREES))
+        .delete(synchronize_session=False)
+    )
+
+    if inserees or mises_a_jour or retirees:
+        db.commit()
+        print(f"[seed] aides : {inserees} insérée(s), {mises_a_jour} mise(s) à jour, {retirees} retirée(s).")
+
+
 def seed():
     db = SessionLocal()
     try:
@@ -869,18 +1179,7 @@ def seed():
             db.commit()
             print(f"[seed] {len(missing_ecoles)} auto-écoles insérées.")
 
-        # Seed aides
-        existing_aides = {
-            nom for (nom,) in db.query(AideDB.nom).all()
-        }
-        missing_aides = [
-            AideDB(**data) for data in AIDES if data["nom"] not in existing_aides
-        ]
-
-        if missing_aides:
-            db.add_all(missing_aides)
-            db.commit()
-            print(f"[seed] {len(missing_aides)} aides insérées.")
+        sync_aides(db)
 
         # Seed libs
         existing_libs = {

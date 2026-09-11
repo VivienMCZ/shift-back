@@ -10,7 +10,6 @@ source = ["app"]
 branch = true
 omit = [
     "app/seed.py",
-    "app/data_seed.py",
     "*/__init__.py",
 ]
 
