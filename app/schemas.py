@@ -88,6 +88,18 @@ class UserResponse(BaseModel):
 
 
 class UserUpdateRequest(BaseModel):
+    """Champs modifiables du profil (RGPD, droit de rectification).
+
+    ``None`` laisse un champ inchangé. L'e-mail n'y figure pas : il sert
+    d'identifiant de connexion, le changer exigerait de vérifier la nouvelle
+    adresse.
+    """
+
+    first_name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    last_name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    # Chaîne vide acceptée : c'est la seule façon de retirer un numéro, ``None``
+    # signifiant « inchangé ».
+    phone: Optional[str] = Field(default=None, max_length=20, pattern=rf"^$|{PHONE_PATTERN}")
     age: Optional[int] = Field(default=None, ge=14, le=120)
     statut: Optional[str] = Field(default=None, max_length=50)
     postal_code: Optional[str] = Field(

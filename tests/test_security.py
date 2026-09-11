@@ -591,3 +591,88 @@ def test_favoris_non_authentifies_ne_sont_pas_cachables(client):
 
     assert response.status_code == 401
     assert "public" not in response.headers.get("cache-control", "")
+
+
+@pytest.mark.parametrize("route", ["/api/v1/aides/saves", "/auth/me/export"])
+def test_donnees_personnelles_jamais_mises_en_cache(client, login, route):
+    login()
+    response = client.get(route)
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "private, no-store"
+
+
+# --------------------------------------------------------------------------- #
+# A01 — Broken Access Control : droits RGPD cloisonnés par compte
+#
+# Export et effacement agissent sur l'utilisateur de la session, jamais sur un
+# identifiant fourni par le client.
+# --------------------------------------------------------------------------- #
+
+
+def test_effacer_la_recherche_dun_autre_compte_repond_404(client, login, make_aide, db):
+    """404 et non 403 : un 403 confirmerait l'existence de la recherche."""
+    from app.api.models.aide import AideSave
+
+    make_aide(montant=1200.0)
+    login(email="alice@example.com")
+    client.post("/api/v1/aides/calculate", json={"age": 20, "statut": "etudiant"})
+    save_id = client.get("/api/v1/aides/saves").json()[0]["id"]
+
+    client.cookies.clear()
+    login(email="bob@example.com")
+    assert client.delete(f"/api/v1/aides/saves/{save_id}").status_code == 404
+    with db() as session:
+        assert session.query(AideSave).count() == 1
+
+
+def test_export_ne_contient_que_les_donnees_du_compte(client, login, make_ecole):
+    ecole_id = make_ecole()
+    login(email="alice@example.com")
+    client.post("/api/ecoles/favorites", json={"auto_ecole_id": ecole_id})
+
+    client.cookies.clear()
+    login(email="bob@example.com")
+    corps = client.get("/auth/me/export").json()
+    assert corps["compte"]["email"] == "bob@example.com"
+    assert corps["favoris"] == []
+
+
+def test_suppression_de_compte_ne_touche_pas_aux_autres(client, login, make_ecole, db):
+    from app.models import Favorite
+
+    ecole_id = make_ecole()
+    login(email="alice@example.com")
+    client.post("/api/ecoles/favorites", json={"auto_ecole_id": ecole_id})
+
+    client.cookies.clear()
+    login(email="bob@example.com")
+    assert client.delete("/auth/me").status_code == 204
+
+    with db() as session:
+        assert session.query(User.email).all() == [("alice@example.com",)]
+        assert session.query(Favorite).count() == 1
+
+
+# --------------------------------------------------------------------------- #
+# RGPD article 9 — données de santé
+# --------------------------------------------------------------------------- #
+
+
+def test_une_recherche_declarant_une_rqth_nest_pas_conservee(client, login, make_aide, db):
+    """La RQTH est une donnée de santé : la conserver exigerait un consentement
+    explicite. Le résultat est rendu, rien n'est écrit — pas même le reste de la
+    recherche, dont les aides obtenues trahiraient le handicap."""
+    from app.api.models.aide import AideSave
+
+    login()
+    make_aide(nom="AGEFIPH", handicap_requis=True, montant=1300.0)
+
+    response = client.post(
+        "/api/v1/aides/calculate",
+        json={"age": 20, "statut": "etudiant", "has_rqth": True},
+    )
+
+    assert [a["nom"] for a in response.json()["aides"]] == ["AGEFIPH"]
+    with db() as session:
+        assert session.query(AideSave).count() == 0

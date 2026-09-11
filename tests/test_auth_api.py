@@ -304,10 +304,99 @@ def test_mise_a_jour_exige_une_authentification(client):
     assert client.put("/auth/me", json={"age": 24}).status_code == 401
 
 
-@pytest.mark.parametrize("charge", [{"age": "vingt"}, {"postal_code": []}])
+@pytest.mark.parametrize(
+    "charge",
+    [{"age": "vingt"}, {"postal_code": []}, {"first_name": ""}, {"phone": "abc"}],
+)
 def test_mise_a_jour_type_invalide(client, login, charge):
     login()
     assert client.put("/auth/me", json=charge).status_code == 422
+
+
+def test_rectification_du_nom_et_du_telephone(client, login):
+    login()
+    corps = client.put(
+        "/auth/me",
+        json={"first_name": "Marie", "last_name": "Curie", "phone": "+33612345678"},
+    ).json()
+    assert (corps["first_name"], corps["last_name"], corps["phone"]) == (
+        "Marie",
+        "Curie",
+        "+33612345678",
+    )
+
+
+def test_une_chaine_vide_retire_le_telephone(client, login):
+    login(phone="0612345678")
+    assert client.put("/auth/me", json={"phone": ""}).json()["phone"] is None
+
+
+def test_un_telephone_deja_pris_est_refuse(client, login, make_user):
+    make_user(email="autre@example.com", phone="0612345678")
+    login()
+    response = client.put("/auth/me", json={"phone": "0612345678"})
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Phone already registered"
+
+
+def test_garder_son_propre_telephone_nest_pas_un_doublon(client, login):
+    login(phone="0612345678")
+    assert client.put("/auth/me", json={"phone": "0612345678"}).status_code == 200
+
+
+# --------------------------------------------------------------------------- #
+# Export des données (RGPD)
+# --------------------------------------------------------------------------- #
+
+
+def test_export_exige_une_authentification(client):
+    assert client.get("/auth/me/export").status_code == 401
+
+
+def test_export_contient_compte_favoris_et_recherches(client, login, make_ecole, make_aide):
+    login(email="export@example.com")
+    ecole_id = make_ecole(name="Auto-école Export")
+    client.post("/api/ecoles/favorites", json={"auto_ecole_id": ecole_id})
+    make_aide(nom="Aide exportée", montant=500.0)
+    client.post("/api/v1/aides/calculate", json={"age": 20, "statut": "etudiant"})
+
+    response = client.get("/auth/me/export")
+
+    assert response.status_code == 200
+    corps = response.json()
+    assert corps["compte"]["email"] == "export@example.com"
+    assert "otp_code" not in corps["compte"]
+    assert [f["nom"] for f in corps["favoris"]] == ["Auto-école Export"]
+    assert corps["recherches_aides"][0]["aides"] == ["Aide exportée"]
+
+
+# --------------------------------------------------------------------------- #
+# Suppression du compte (RGPD)
+# --------------------------------------------------------------------------- #
+
+
+def test_suppression_du_compte_efface_tout(client, login, make_ecole, make_aide, db):
+    from app.api.models.aide import AideSave
+    from app.models import Favorite, User
+
+    user_id = login()
+    ecole_id = make_ecole()
+    client.post("/api/ecoles/favorites", json={"auto_ecole_id": ecole_id})
+    make_aide(montant=500.0)
+    client.post("/api/v1/aides/calculate", json={"age": 20, "statut": "etudiant"})
+
+    response = client.delete("/auth/me")
+
+    assert response.status_code == 204
+    with db() as session:
+        assert session.query(User).filter(User.id == user_id).count() == 0
+        assert session.query(Favorite).count() == 0
+        assert session.query(AideSave).count() == 0
+    assert client.get("/auth/me").status_code == 401
+
+
+def test_suppression_exige_une_authentification(client):
+    assert client.delete("/auth/me").status_code == 401
 
 
 # --------------------------------------------------------------------------- #

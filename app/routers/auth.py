@@ -20,7 +20,8 @@ from sqlalchemy.orm import Session
 
 from app.config import get_env_bool, get_env_int
 from app.database import get_db
-from app.models import User
+from app.api.models.aide import AideSave
+from app.models import AutoEcole, Favorite, User
 from app.schemas import (
     AuthRequest,
     RegisterRequest,
@@ -244,6 +245,17 @@ def update_current_user(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if payload.first_name is not None:
+        current_user.first_name = payload.first_name
+    if payload.last_name is not None:
+        current_user.last_name = payload.last_name
+    if payload.phone is not None:
+        phone = payload.phone or None
+        if phone and phone != current_user.phone:
+            pris = db.query(User.id).filter(User.phone == phone, User.id != current_user.id).first()
+            if pris:
+                raise HTTPException(status_code=400, detail="Phone already registered")
+        current_user.phone = phone
     if payload.age is not None:
         current_user.age = payload.age
     if payload.statut is not None:
@@ -254,3 +266,82 @@ def update_current_user(
     db.commit()
     db.refresh(current_user)
     return current_user
+
+
+@router.get("/me/export")
+def export_current_user(
+    response: Response,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Toutes les données rattachées au compte (RGPD, droits d'accès et de portabilité)."""
+    response.headers["Cache-Control"] = "private, no-store"
+
+    favoris = (
+        db.query(Favorite.created_at, AutoEcole.id, AutoEcole.name, AutoEcole.city)
+        .join(AutoEcole, AutoEcole.id == Favorite.auto_ecole_id)
+        .filter(Favorite.user_id == current_user.id)
+        .order_by(Favorite.created_at.desc())
+        .all()
+    )
+    recherches = (
+        db.query(AideSave)
+        .filter(AideSave.user_id == current_user.id)
+        .order_by(AideSave.created_at.desc())
+        .all()
+    )
+
+    def iso(instant):
+        return instant.isoformat() if instant else None
+
+    return {
+        "exporte_le": iso(utcnow()),
+        "compte": {
+            **UserResponse.model_validate(current_user).model_dump(),
+            "created_at": iso(current_user.created_at),
+        },
+        "favoris": [
+            {"auto_ecole_id": id_, "nom": nom, "ville": ville, "ajoute_le": iso(ajoute_le)}
+            for ajoute_le, id_, nom, ville in favoris
+        ],
+        "recherches_aides": [
+            {
+                "profil": r.profile,
+                "aides": [a.get("nom") for a in (r.aides or [])],
+                "total_potentiel": r.total_potentiel,
+                "created_at": iso(r.created_at),
+            }
+            for r in recherches
+        ],
+    }
+
+
+@router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
+def delete_current_user(
+    response: Response,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Supprime le compte et tout ce qui s'y rattache (RGPD, droit à l'effacement).
+
+    Suppression réelle, pas un marquage : favoris et historique d'aides partent
+    avec le compte. Les clés étrangères n'ont pas de ``ON DELETE CASCADE`` —
+    ajouter une contrainte exigerait une migration —, les lignes filles sont donc
+    effacées explicitement, dans la même transaction.
+    """
+    db.query(Favorite).filter(Favorite.user_id == current_user.id).delete(synchronize_session=False)
+    db.query(AideSave).filter(AideSave.user_id == current_user.id).delete(synchronize_session=False)
+    otp_attempt_limiter.reset(current_user.email)
+    db.delete(current_user)
+    db.commit()
+
+    # Le jeton resterait valide jusqu'à expiration, mais ne désignerait plus
+    # aucun compte : on le retire tout de même du navigateur.
+    response.delete_cookie(
+        key=COOKIE_NAME,
+        path="/",
+        httponly=True,
+        secure=COOKIE_SECURE,
+        samesite=COOKIE_SAMESITE,
+    )
+    logger.info("Compte supprimé à la demande de son titulaire.")

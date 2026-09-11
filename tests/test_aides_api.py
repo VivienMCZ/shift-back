@@ -262,3 +262,27 @@ def test_historique_fige_le_resultat_meme_si_laide_change(client, login, make_ai
     entree = client.get(f"{BASE}/saves").json()[0]
     assert entree["aides"][0]["nom"] == "Aide d'origine"
     assert entree["total_potentiel"] == 1200.0
+
+
+# --------------------------------------------------------------------------- #
+# Effacement d'une recherche
+# --------------------------------------------------------------------------- #
+
+
+def test_supprimer_une_recherche(client, login, make_aide):
+    login()
+    make_aide(montant=1200.0)
+    client.post(f"{BASE}/calculate", json=PROFIL_ETUDIANT)
+    save_id = client.get(f"{BASE}/saves").json()[0]["id"]
+
+    assert client.delete(f"{BASE}/saves/{save_id}").status_code == 204
+    assert client.get(f"{BASE}/saves").json() == []
+
+
+def test_supprimer_une_recherche_exige_une_authentification(client):
+    assert client.delete(f"{BASE}/saves/1").status_code == 401
+
+
+def test_supprimer_une_recherche_inexistante(client, login):
+    login()
+    assert client.delete(f"{BASE}/saves/999").status_code == 404
