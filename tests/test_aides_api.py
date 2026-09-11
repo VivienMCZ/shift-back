@@ -22,7 +22,7 @@ PROFIL_ETUDIANT = {
 def test_calcul_sans_aide_en_base(client):
     response = client.post(f"{BASE}/calculate", json=PROFIL_ETUDIANT)
     assert response.status_code == 200
-    assert response.json() == {"aides": [], "total_potentiel": 0.0}
+    assert response.json() == {"aides": [], "total_potentiel": 0.0, "total_prets": 0.0}
 
 
 def test_calcul_retourne_les_aides_eligibles(client, make_aide):
@@ -99,6 +99,62 @@ def test_calcul_valeurs_booleennes_par_defaut(client, make_aide):
         f"{BASE}/calculate", json={"age": 20, "statut": "etudiant"}
     ).json()
     assert corps["aides"] == []
+
+
+# --------------------------------------------------------------------------- #
+# Localisation déduite du code postal
+# --------------------------------------------------------------------------- #
+
+
+def test_le_code_postal_ouvre_les_aides_regionales(client, make_aide):
+    """Le front n'envoie que le code postal : la région doit en être déduite."""
+    make_aide(nom="Aide Île-de-France", region="Île-de-France", montant=300.0)
+    profil = {"age": 20, "statut": "etudiant", "code_postal": "93200"}
+
+    corps = client.post(f"{BASE}/calculate", json=profil).json()
+    assert [a["nom"] for a in corps["aides"]] == ["Aide Île-de-France"]
+
+    ailleurs = client.post(f"{BASE}/calculate", json={**profil, "code_postal": "31000"}).json()
+    assert ailleurs["aides"] == []
+
+
+def test_le_code_postal_ouvre_les_aides_departementales(client, make_aide):
+    make_aide(nom="Aide Guadeloupe", departement="971", montant=400.0)
+    corps = client.post(
+        f"{BASE}/calculate", json={"age": 20, "statut": "etudiant", "code_postal": "97110"}
+    ).json()
+    assert [a["nom"] for a in corps["aides"]] == ["Aide Guadeloupe"]
+
+
+def test_une_region_explicite_prime_sur_le_code_postal(client, make_aide):
+    make_aide(nom="Aide Occitanie", region="Occitanie", montant=300.0)
+    corps = client.post(
+        f"{BASE}/calculate",
+        json={"age": 20, "statut": "etudiant", "code_postal": "75001", "region": "Occitanie"},
+    ).json()
+    assert len(corps["aides"]) == 1
+
+
+@pytest.mark.parametrize("code_postal", ["7500", "750011", "75A01"])
+def test_code_postal_mal_forme_refuse(client, code_postal):
+    response = client.post(
+        f"{BASE}/calculate", json={"age": 20, "statut": "etudiant", "code_postal": code_postal}
+    )
+    assert response.status_code == 422
+
+
+def test_le_statut_chomeur_obtient_les_aides_des_demandeurs_demploi(client, make_aide):
+    make_aide(nom="CPF", statut_requis=["salarie", "demandeur_emploi"], montant=900.0)
+    corps = client.post(f"{BASE}/calculate", json={"age": 30, "statut": "chomeur"}).json()
+    assert [a["nom"] for a in corps["aides"]] == ["CPF"]
+
+
+def test_les_prets_sont_totalises_a_part(client, make_aide):
+    make_aide(nom="Aide", montant=500.0)
+    make_aide(nom="Prêt", categorie="Prêt", montant=1200.0)
+    corps = client.post(f"{BASE}/calculate", json=PROFIL_ETUDIANT).json()
+    assert corps["total_potentiel"] == 500.0
+    assert corps["total_prets"] == 1200.0
 
 
 # --------------------------------------------------------------------------- #

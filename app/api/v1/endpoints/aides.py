@@ -2,6 +2,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from app.database import get_db
+from app.api.geo import departement_depuis_code_postal, region_depuis_departement
 from app.api.models.aide import AideDB, AideSave
 from app.api.models.user_profile import UserProfile
 from app.api.aide_calculator import CalculateurAides
@@ -22,6 +23,19 @@ def get_optional_user(request: Request, db: Session):
     except HTTPException:
         return None
 
+def localiser(profile: UserProfileSchema) -> dict:
+    """Champs du profil, complétés par la localisation déduite du code postal.
+
+    Une région ou un département fournis explicitement priment : ils restent le
+    moyen de préciser un cas que le code postal ne tranche pas.
+    """
+    donnees = profile.model_dump()
+    departement = donnees["departement"] or departement_depuis_code_postal(donnees["code_postal"])
+    donnees["departement"] = departement
+    donnees["region"] = donnees["region"] or region_depuis_departement(departement)
+    return donnees
+
+
 @router.post("/calculate", response_model=CalculationResultSchema)
 def calculate_aides(profile: UserProfileSchema, request: Request, db: Session = Depends(get_db)):
     """
@@ -31,7 +45,7 @@ def calculate_aides(profile: UserProfileSchema, request: Request, db: Session = 
     sauvegardée pour être retrouvée dans son profil.
     """
     # Conversion vers le dataclass de logique métier
-    user_profile = UserProfile(**profile.model_dump())
+    user_profile = UserProfile(**localiser(profile))
 
     # Récupération des aides en base
     all_aides = db.query(AideDB).all()
