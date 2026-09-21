@@ -1,14 +1,14 @@
 # Dépendances d'exécution — versions figées pour des builds reproductibles.
 # Mises à jour automatiquement par Dependabot (.github/dependabot.yml).
 fastapi==0.141.1
-uvicorn[standard]==0.52.4
-sqlalchemy==2.0.52
-psycopg2-binary==2.9.12
+uvicorn[standard]==0.53.0
+sqlalchemy==2.0.54
+psycopg2-binary==2.9.13
 httpx==0.28.1
 python-dotenv==1.2.3
-PyJWT==2.13.0
+PyJWT==2.14.0
 
 # Dépendance transitive de uvicorn[standard] (via watchfiles). Épinglée
 # explicitement au-dessus de 1.2.1 : les versions antérieures portent
 # GHSA-6v7p-g79w-8964 (lecture hors bornes), que le scan Trivy bloque.
-msgpack==1.2.1
+msgpack==1.2.2
