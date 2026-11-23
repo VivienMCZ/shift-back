@@ -205,14 +205,14 @@ jobs:
       # Détecte une clé, un jeton ou un mot de passe commité par erreur, dans le
       # dépôt comme dans l'historique.
       - name: Scan des secrets (gitleaks)
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Lint du Dockerfile : utilisateur non-root, versions épinglées, couches
       # inutiles. Bloquant à partir du niveau error.
       - name: Lint du Dockerfile (hadolint)
-        uses: hadolint/hadolint-action@v3.1.0
+        uses: hadolint/hadolint-action@v3.5.0
         with:
           dockerfile: Dockerfile
           failure-threshold: error
